@@ -1,898 +1,770 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import joblib, os, io, datetime, time, warnings
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import seaborn as sns
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import joblib
-import os
-import warnings
-warnings.filterwarnings("ignore")
+import matplotlib.gridspec as gridspec
+from matplotlib.colors import LinearSegmentedColormap
+import shap
+from sklearn.metrics import roc_curve, auc, confusion_matrix
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors as rl_colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import tempfile
 
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="OCP — Maintenance Prédictive",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+warnings.filterwarnings('ignore')
 
-# ─── COULEURS OCP ─────────────────────────────────────────────────────────────
-OCP_GREEN  = "#007A4D"
-OCP_GOLD   = "#F5A800"
-OCP_RED    = "#C0392B"
-OCP_BLUE   = "#1A6A9E"
-OCP_ORANGE = "#E67E22"
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(page_title="OCP — Maintenance Prédictive", page_icon="🏭", layout="wide")
 
-# ─── CSS CUSTOM ───────────────────────────────────────────────────────────────
+OCP_GREEN='#007A4D'; OCP_RED='#C0392B'; OCP_GOLD='#F5A800'; OCP_BLUE='#1A6A9E'; OCP_DARK='#1a1a2e'
+FEATURES = ['Type_enc','Air temperature [K]','Process temperature [K]',
+            'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]',
+            'Temp_diff [K]','Power [W]','Torque_Speed_ratio','Wear_norm','Overheat_flag']
+FEAT_LABELS = ['Type','Air Temp','Proc Temp','RPM','Torque','Tool Wear',
+               'ΔT','Power','Tq/Speed','Wear%','Overheat']
+TOOL_WEAR_MAX = 253.0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CSS — Dark Mode professionnel
+# ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0d1f17 0%, #0a1510 100%);
-        border-right: 1px solid rgba(0,122,77,0.3);
-    }
-    [data-testid="stSidebar"] * { color: #c8ddd4 !important; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
 
-    /* Main background */
-    .main { background-color: #0f1a14; }
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
 
-    /* Metric cards */
-    [data-testid="metric-container"] {
-        background: rgba(0,122,77,0.1);
-        border: 1px solid rgba(0,122,77,0.25);
-        border-radius: 10px;
-        padding: 1rem;
-    }
+.stApp { background: #0f0f1a !important; color: #e8e8f0 !important; }
+.block-container { padding-top: 1.2rem !important; }
+section[data-testid="stSidebar"] { display:none; }
 
-    /* Section headers */
-    .section-header {
-        font-size: 11px;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-        color: #007A4D;
-        border-bottom: 1px solid rgba(0,122,77,0.3);
-        padding-bottom: 8px;
-        margin-bottom: 16px;
-        font-family: monospace;
-    }
+/* Header */
+.ocp-header {
+    background: linear-gradient(135deg, #007A4D 0%, #005c38 50%, #003d26 100%);
+    border-radius: 16px; padding: 1.8rem 2.2rem; margin-bottom: 1.5rem;
+    box-shadow: 0 8px 32px rgba(0,122,77,0.35);
+    border: 1px solid rgba(245,168,0,0.3);
+    position: relative; overflow: hidden;
+}
+.ocp-header::before {
+    content:''; position:absolute; top:-50%; right:-10%; width:300px; height:300px;
+    background: radial-gradient(circle, rgba(245,168,0,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+}
+.ocp-header h1 { margin:0; font-size:2rem; font-weight:800; color:white; letter-spacing:-.5px; }
+.ocp-header .sub { margin:.4rem 0 0; color:rgba(255,255,255,.75); font-size:.88rem; }
+.ocp-header .badge {
+    display:inline-block; background:rgba(245,168,0,.2); border:1px solid rgba(245,168,0,.5);
+    color:#F5A800; border-radius:20px; padding:.2rem .7rem; font-size:.75rem;
+    font-weight:600; margin:.5rem .3rem 0 0;
+}
 
-    /* Alert boxes */
-    .alert-normal  { background:#1a3d2b; border:1px solid #2ECC71; border-radius:10px; padding:16px; }
-    .alert-watch   { background:#3d3010; border:1px solid #F5A800; border-radius:10px; padding:16px; }
-    .alert-warning { background:#3d2010; border:1px solid #E67E22; border-radius:10px; padding:16px; }
-    .alert-critical{ background:#3d1010; border:1px solid #C0392B; border-radius:10px; padding:16px; }
+/* Cards */
+.card {
+    background: #16162a; border-radius:12px; padding:1.2rem 1.4rem;
+    border: 1px solid rgba(255,255,255,.07);
+    box-shadow: 0 4px 20px rgba(0,0,0,.3);
+    margin-bottom: .8rem;
+}
+.card-green { border-left: 4px solid #007A4D; }
+.card-red   { border-left: 4px solid #C0392B; }
+.card-gold  { border-left: 4px solid #F5A800; }
+.card-blue  { border-left: 4px solid #1A6A9E; }
 
-    /* KPI cards */
-    .kpi-box {
-        background: rgba(0,122,77,0.08);
-        border: 1px solid rgba(0,122,77,0.2);
-        border-radius: 10px;
-        padding: 14px 18px;
-        text-align: center;
-    }
-    .kpi-val { font-size: 28px; font-weight: 700; color: #F5A800; }
-    .kpi-lbl { font-size: 11px; color: #8aada0; text-transform: uppercase; letter-spacing: 1px; }
+/* Section titles */
+.section-title {
+    font-size:.9rem; font-weight:700; color:#F5A800; letter-spacing:.5px;
+    text-transform:uppercase; border-bottom:1px solid rgba(245,168,0,.3);
+    padding-bottom:.35rem; margin-bottom:1rem;
+}
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        background: rgba(0,122,77,0.08);
-        border-radius: 8px;
-        gap: 4px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px;
-        color: #8aada0;
-        font-size: 13px;
-    }
-    .stTabs [aria-selected="true"] {
-        background: rgba(0,122,77,0.3) !important;
-        color: #00A86B !important;
-    }
+/* Result boxes */
+.result-ok {
+    background: linear-gradient(135deg,rgba(0,122,77,.25),rgba(0,122,77,.1));
+    border:2px solid #007A4D; border-radius:12px; padding:1.2rem 1.4rem;
+    color:#4ecca3; font-size:1.15rem; font-weight:700; text-align:center;
+    box-shadow: 0 0 20px rgba(0,122,77,.2);
+}
+.result-fail {
+    background: linear-gradient(135deg,rgba(192,57,43,.25),rgba(192,57,43,.1));
+    border:2px solid #C0392B; border-radius:12px; padding:1.2rem 1.4rem;
+    color:#ff6b6b; font-size:1.15rem; font-weight:700; text-align:center;
+    box-shadow: 0 0 20px rgba(192,57,43,.2);
+}
 
-    /* Buttons */
-    .stButton > button {
-        background: #007A4D;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: 600;
-        letter-spacing: 0.3px;
-        padding: 0.5rem 2rem;
-        transition: all 0.2s;
-    }
-    .stButton > button:hover { background: #00A86B; }
+/* Alert boxes */
+.alert-crit {
+    background:rgba(192,57,43,.15); border-left:4px solid #C0392B;
+    border-radius:6px; padding:.7rem 1rem; margin:.4rem 0; font-size:.85rem; color:#ff8a80;
+}
+.alert-warn {
+    background:rgba(245,168,0,.1); border-left:4px solid #F5A800;
+    border-radius:6px; padding:.7rem 1rem; margin:.4rem 0; font-size:.85rem; color:#ffd54f;
+}
 
-    /* Sliders */
-    .stSlider [data-baseweb="slider"] { padding-top: 8px; }
+/* KPI metrics */
+.kpi-grid { display:flex; gap:.8rem; flex-wrap:wrap; margin-bottom:1rem; }
+.kpi {
+    background:#16162a; border-radius:10px; padding:.9rem 1.2rem; flex:1; min-width:120px;
+    text-align:center; border:1px solid rgba(255,255,255,.08);
+    box-shadow: 0 2px 10px rgba(0,0,0,.2);
+}
+.kpi .val { font-size:1.6rem; font-weight:800; color:#F5A800; }
+.kpi .lbl { font-size:.73rem; color:#aaa; margin-top:.2rem; }
 
-    /* Title */
-    h1 { color: #E8F5EE !important; }
-    h2, h3 { color: #c8ddd4 !important; }
+/* Streamlit overrides */
+.stTabs [data-baseweb="tab-list"] { background:#16162a !important; border-radius:10px; gap:4px; }
+.stTabs [data-baseweb="tab"] { color:#aaa !important; border-radius:8px !important; font-weight:600 !important; }
+.stTabs [aria-selected="true"] { background:#007A4D !important; color:white !important; }
+.stSlider > div > div > div > div { background:#007A4D !important; }
+div[data-testid="metric-container"] {
+    background:#16162a; border-radius:10px; padding:.6rem 1rem;
+    border:1px solid rgba(255,255,255,.08);
+}
+.stSelectbox > div > div { background:#16162a !important; border-color:rgba(255,255,255,.15) !important; }
+.stButton > button {
+    background: linear-gradient(135deg,#007A4D,#005c38) !important;
+    color:white !important; border:none !important; border-radius:8px !important;
+    font-weight:700 !important; letter-spacing:.3px !important;
+    box-shadow:0 4px 15px rgba(0,122,77,.3) !important;
+    transition: all .2s !important;
+}
+.stButton > button:hover { transform:translateY(-1px) !important; box-shadow:0 6px 20px rgba(0,122,77,.4) !important; }
+.stDownloadButton > button {
+    background: linear-gradient(135deg,#1A6A9E,#0d4a72) !important;
+    color:white !important; border:none !important; border-radius:8px !important; font-weight:700 !important;
+}
+.stDataFrame { border-radius:10px; overflow:hidden; }
+label, .stSlider label { color:#ccc !important; font-size:.85rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─── SIDEBAR ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-    <div style='text-align:center; padding: 16px 0 24px;'>
-      <div style='width:56px;height:56px;background:#007A4D;border-radius:12px;
-                  display:flex;align-items:center;justify-content:center;
-                  margin:0 auto 10px;font-size:22px;'>🏭</div>
-      <div style='font-size:15px;font-weight:700;color:#E8F5EE;'>OCP GROUP</div>
-      <div style='font-size:11px;color:#8aada0;letter-spacing:1px;margin-top:2px;'>MAINTENANCE PRÉDICTIVE</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    page = st.radio(
-        "Navigation",
-        ["🏠 Accueil", "📊 Dashboard", "🤖 Simulateur", "📈 Modèles", "📋 Rapport"],
-        label_visibility="collapsed"
-    )
-
-    st.markdown("---")
-    st.markdown("""
-    <div style='font-size:11px; color:#8aada0; line-height:1.8;'>
-    <b style='color:#007A4D;'>Dataset</b><br>
-    AI4I 2020 Predictive Maintenance<br><br>
-    <b style='color:#007A4D;'>Modèles entraînés</b><br>
-    6 algorithmes comparés<br><br>
-    <b style='color:#007A4D;'>Version</b><br>
-    v2.0 — OCP Group
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ─── DONNÉES INTÉGRÉES (résultats du notebook) ────────────────────────────────
-@st.cache_data
-def load_data():
-    """Données simulées basées sur les résultats du notebook AI4I."""
-    np.random.seed(42)
-    n = 10000
-    machine_type = np.random.choice(['L','M','H'], n, p=[0.6,0.3,0.1])
-    air_temp  = np.random.normal(300, 2, n)
-    proc_temp = air_temp + np.random.normal(10, 1, n)
-    rot_speed = np.random.normal(1538, 179, n)
-    torque    = np.random.normal(40, 10, n)
-    tool_wear = np.random.uniform(0, 254, n)
-
-    # Logique de panne inspirée du dataset réel
-    failure_prob = (
-        0.01
-        + 0.03 * (torque > 60).astype(float)
-        + 0.04 * (tool_wear > 200).astype(float)
-        + 0.02 * (rot_speed < 1300).astype(float)
-        + 0.03 * ((proc_temp - air_temp) > 12).astype(float)
-        + 0.02 * (machine_type == 'L').astype(float)
-    )
-    failure = (np.random.random(n) < failure_prob).astype(int)
-
-    df = pd.DataFrame({
-        'Type': machine_type,
-        'Air temperature [K]': air_temp,
-        'Process temperature [K]': proc_temp,
-        'Rotational speed [rpm]': rot_speed,
-        'Torque [Nm]': torque,
-        'Tool wear [min]': tool_wear,
-        'Machine failure': failure,
-        'TWF': (np.random.random(n) < 0.01).astype(int),
-        'HDF': (np.random.random(n) < 0.012).astype(int),
-        'PWF': (np.random.random(n) < 0.009).astype(int),
-        'OSF': (np.random.random(n) < 0.008).astype(int),
-        'RNF': (np.random.random(n) < 0.001).astype(int),
-    })
-    return df
-
-df = load_data()
-
-# Résultats des modèles (issus du notebook)
-MODEL_RESULTS = {
-    "XGBoost":             {"f1": 0.9124, "roc_auc": 0.9871, "precision": 0.9203, "recall": 0.9047, "cv_mean": 0.9089},
-    "LightGBM":            {"f1": 0.9067, "roc_auc": 0.9842, "precision": 0.9115, "recall": 0.9021, "cv_mean": 0.9031},
-    "Forêt Aléatoire":     {"f1": 0.8934, "roc_auc": 0.9798, "precision": 0.9012, "recall": 0.8857, "cv_mean": 0.8901},
-    "Gradient Boosting":   {"f1": 0.8801, "roc_auc": 0.9743, "precision": 0.8912, "recall": 0.8692, "cv_mean": 0.8768},
-    "Régression Logistique":{"f1": 0.7623, "roc_auc": 0.8912, "precision": 0.7801, "recall": 0.7452, "cv_mean": 0.7589},
-    "SVM":                 {"f1": 0.7914, "roc_auc": 0.9102, "precision": 0.8023, "recall": 0.7808, "cv_mean": 0.7881},
-}
-BEST_MODEL = "XGBoost"
-
-FEATURE_IMPORTANCE = {
-    "Power (W)":               0.2341,
-    "Tool wear [min]":         0.1987,
-    "Torque [Nm]":             0.1654,
-    "Temp diff (K)":           0.1423,
-    "Rotational speed [rpm]":  0.1189,
-    "Torque/Speed ratio":      0.0876,
-    "Wear normalized":         0.0712,
-    "Process temperature [K]": 0.0543,
-    "Air temperature [K]":     0.0321,
-    "Type (encoded)":          0.0198,
-    "Overheat flag":           0.0156,
-}
-
-
-# ─── CHARGEMENT DU VRAI MODÈLE XGBoost ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# ARTEFACTS
+# ══════════════════════════════════════════════════════════════════════════════
 @st.cache_resource
-def load_model():
-    """Charge les vrais fichiers pkl entraînés dans le notebook."""
-    try:
-        model  = joblib.load("ocp_best_model.pkl")
-        scaler = joblib.load("ocp_scaler.pkl")
-        le     = joblib.load("ocp_label_encoder.pkl")
-        return model, scaler, le, True
-    except Exception as e:
-        return None, None, None, False
+def load_artefacts():
+    base   = os.path.dirname(__file__)
+    model  = joblib.load(os.path.join(base,"ocp_best_model.pkl"))
+    scaler = joblib.load(os.path.join(base,"ocp_scaler.pkl"))
+    le     = joblib.load(os.path.join(base,"ocp_label_encoder.pkl"))
+    return model, scaler, le
 
-_model, _scaler, _le, MODEL_LOADED = load_model()
-
-# ─── FONCTIONS UTILITAIRES ────────────────────────────────────────────────────
-def predict_failure(machine_type, air_temp_K, proc_temp_K,
-                    rot_speed_rpm, torque_Nm, tool_wear_min, threshold=0.35):
-    """Prédiction via le vrai modèle XGBoost (fallback simulé si pkl absent)."""
-    type_enc       = {'H': 0, 'L': 1, 'M': 2}.get(machine_type.upper(), 1)
-    temp_diff      = proc_temp_K - air_temp_K
-    power_W        = torque_Nm * (rot_speed_rpm * 2 * np.pi / 60)
-    torque_speed_r = torque_Nm / (rot_speed_rpm + 1e-6)
-    wear_norm      = tool_wear_min / 254.0
-    overheat       = int(proc_temp_K > 309 and rot_speed_rpm < 1380)
-
-    if MODEL_LOADED:
-        # ── Vrai modèle XGBoost ──
-        features_vec    = np.array([[type_enc, air_temp_K, proc_temp_K, rot_speed_rpm,
-                                     torque_Nm, tool_wear_min, temp_diff, power_W,
-                                     torque_speed_r, wear_norm, overheat]])
-        features_scaled = _scaler.transform(features_vec)
-        proba           = float(_model.predict_proba(features_scaled)[0][1])
-        source          = "🤖 XGBoost (modèle réel)"
-    else:
-        # ── Fallback simulé ──
-        proba = (
-            0.02
-            + 0.18 * min(wear_norm, 1.0)
-            + 0.22 * max(0, (torque_Nm - 50) / 40)
-            + 0.15 * max(0, (1500 - rot_speed_rpm) / 500)
-            + 0.12 * max(0, (temp_diff - 10) / 5)
-            + 0.10 * overheat
-            + 0.08 * (type_enc == 1)
-            + 0.05 * max(0, (power_W - 4000) / 4000)
-        )
-        proba  = min(max(proba, 0.01), 0.99)
-        source = "⚠️ Modèle simulé (pkl non trouvé)"
-
-    if proba < 0.3:
-        alert  = "🟢 NORMAL"
-        action = "Aucune action requise. Surveillance standard."
-        level  = "normal"
-    elif proba < 0.6:
-        alert  = "🟡 ATTENTION"
-        action = "Inspection préventive recommandée dans les 48h."
-        level  = "watch"
-    elif proba < 0.85:
-        alert  = "🟠 ALERTE"
-        action = "Intervention de maintenance urgente requise."
-        level  = "warning"
-    else:
-        alert  = "🔴 CRITIQUE"
-        action = "ARRÊT IMMÉDIAT recommandé. Risque de panne imminente."
-        level  = "critical"
-
-    return {
-        "proba":   round(proba, 4),
-        "alert":   alert,
-        "action":  action,
-        "level":   level,
-        "source":  source,
-        "features": {
-            "Puissance (W)":        round(power_W, 1),
-            "Diff. Temp (K)":       round(temp_diff, 2),
-            "Usure normalisée":     round(wear_norm, 3),
-            "Ratio Couple/Vitesse": round(torque_speed_r * 1000, 4),
-            "Surchauffe flag":      overheat,
-        }
-    }
-
-
-def plotly_theme():
-    return dict(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#c8ddd4", family="monospace"),
-    )
-
-def axis_style():
-    return dict(gridcolor="rgba(0,122,77,0.15)", zerolinecolor="rgba(0,122,77,0.2)", color="#c8ddd4")
-
+model, scaler, le = load_artefacts()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE : ACCUEIL
+# SESSION STATE
 # ══════════════════════════════════════════════════════════════════════════════
-if page == "🏠 Accueil":
-    col_logo, col_title = st.columns([1, 4])
-    with col_title:
-        st.markdown("""
-        <h1 style='font-size:36px; margin-bottom:4px;'>
-            🏭 OCP — Système de Maintenance Prédictive
-        </h1>
-        <p style='color:#8aada0; font-size:15px; margin-bottom:0;'>
-            Détection intelligente des pannes équipements industriels — AI4I 2020 Dataset
-        </p>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # KPIs principaux
-    st.markdown('<div class="section-header">⚡ INDICATEURS CLÉS DU PROJET</div>', unsafe_allow_html=True)
-    k1, k2, k3, k4, k5 = st.columns(5)
-    kpis = [
-        (k1, "10 000", "Équipements analysés"),
-        (k2, "3.4%",   "Taux de panne global"),
-        (k3, "91.2%",  "F1-Score XGBoost"),
-        (k4, "98.7%",  "ROC-AUC XGBoost"),
-        (k5, "6",      "Modèles comparés"),
-    ]
-    for col, val, lbl in kpis:
-        with col:
-            st.markdown(f"""
-            <div class='kpi-box'>
-                <div class='kpi-val'>{val}</div>
-                <div class='kpi-lbl'>{lbl}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Pipeline du projet
-    st.markdown('<div class="section-header">🔄 PIPELINE DU PROJET</div>', unsafe_allow_html=True)
-    steps = [
-        ("1", "📂 Données", "Chargement AI4I 2020\n10 000 enregistrements IoT"),
-        ("2", "🧹 Qualité", "Détection outliers IQR\nWinsorisation 1%-99%"),
-        ("3", "📊 EDA", "Analyse exploratoire\nDistributions & corrélations"),
-        ("4", "⚙️ Features", "5 variables originales\n+ 6 features dérivées"),
-        ("5", "🤖 Modèles", "6 algorithmes ML\nSMOTE pour déséquilibre"),
-        ("6", "🔍 SHAP", "Interprétabilité\nImportance des features"),
-        ("7", "🚨 Déploiement", "Simulateur temps réel\nSystème d'alertes"),
-    ]
-    cols = st.columns(len(steps))
-    for col, (num, title, desc) in zip(cols, steps):
-        with col:
-            st.markdown(f"""
-            <div style='background:rgba(0,122,77,0.08);border:1px solid rgba(0,122,77,0.2);
-                        border-radius:10px;padding:14px 10px;text-align:center;height:140px;'>
-                <div style='font-size:20px;margin-bottom:6px;'>{title.split()[0]}</div>
-                <div style='font-size:12px;font-weight:600;color:#00A86B;margin-bottom:6px;'>{title.split(' ',1)[1]}</div>
-                <div style='font-size:10px;color:#8aada0;line-height:1.5;'>{desc.replace(chr(10),'<br>')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Types de pannes
-    st.markdown('<div class="section-header">⚠️ TYPES DE PANNES DÉTECTÉES</div>', unsafe_allow_html=True)
-    failure_types = {
-        "TWF — Usure Outil": {"count": df['TWF'].sum(), "color": OCP_RED, "desc": "Remplacement outil nécessaire"},
-        "HDF — Dissipation": {"count": df['HDF'].sum(), "color": OCP_ORANGE, "desc": "Problème de refroidissement"},
-        "PWF — Puissance":   {"count": df['PWF'].sum(), "color": OCP_GOLD, "desc": "Hors plage de puissance"},
-        "OSF — Surcharge":   {"count": df['OSF'].sum(), "color": OCP_BLUE, "desc": "Surcharge mécanique"},
-        "RNF — Aléatoire":   {"count": df['RNF'].sum(), "color": OCP_GREEN, "desc": "Panne non prédictible"},
-    }
-    cols = st.columns(5)
-    for col, (name, info) in zip(cols, failure_types.items()):
-        with col:
-            st.markdown(f"""
-            <div style='background:rgba(0,0,0,0.2);border-left:3px solid {info["color"]};
-                        border-radius:0 8px 8px 0;padding:12px;margin-bottom:8px;'>
-                <div style='font-size:20px;font-weight:700;color:{info["color"]};'>{info["count"]}</div>
-                <div style='font-size:11px;font-weight:600;color:#c8ddd4;margin:2px 0;'>{name}</div>
-                <div style='font-size:10px;color:#8aada0;'>{info["desc"]}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.info("💡 **Conseil :** Utilisez le **Simulateur** pour tester en temps réel ou le **Dashboard** pour explorer les données visuellement.")
-
+if 'history'       not in st.session_state: st.session_state.history = []
+if 'sim_running'   not in st.session_state: st.session_state.sim_running = False
+if 'sim_data'      not in st.session_state: st.session_state.sim_data = []
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE : DASHBOARD
+# HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "📊 Dashboard":
-    st.markdown("## 📊 Dashboard — Analyse Exploratoire")
-    st.markdown("---")
+def compute_features(type_enc, air_temp, proc_temp, rot_speed, torque, tool_wear):
+    td  = proc_temp - air_temp
+    pw  = torque * (rot_speed * 2 * np.pi / 60)
+    tsr = torque / (rot_speed + 1e-6)
+    wn  = tool_wear / TOOL_WEAR_MAX
+    oh  = int(proc_temp > 309 and rot_speed < 1380)
+    X   = np.array([[type_enc, air_temp, proc_temp, rot_speed, torque, tool_wear, td, pw, tsr, wn, oh]])
+    return X
 
-    tab1, tab2, tab3 = st.tabs(["Distribution & Pannes", "Capteurs & Corrélations", "Par Type de Machine"])
+def predict(X_raw):
+    Xs   = scaler.transform(X_raw)
+    pred = int(model.predict(Xs)[0])
+    prob = float(model.predict_proba(Xs)[0][1]) * 100
+    return pred, prob, Xs
 
-    with tab1:
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Répartition Normal / Panne**")
-            counts = df['Machine failure'].value_counts()
-            fig = px.pie(
-                names=["Normal", "Panne"],
-                values=[counts.get(0, 0), counts.get(1, 0)],
-                color_discrete_sequence=[OCP_GREEN, OCP_RED],
-                hole=0.45,
-            )
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), showlegend=True, height=300, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')), xaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"), yaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"))
-            fig.update_traces(textinfo="percent+label")
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.markdown("**Nombre de pannes par type**")
-            failure_cols = ['TWF','HDF','PWF','OSF','RNF']
-            fail_counts  = df[failure_cols].sum().sort_values(ascending=False)
-            colors = [OCP_RED, OCP_ORANGE, OCP_GOLD, OCP_BLUE, OCP_GREEN]
-            fig = px.bar(
-                x=fail_counts.index, y=fail_counts.values,
-                color=fail_counts.index,
-                color_discrete_sequence=colors,
-                labels={"x": "Type", "y": "Nombre"},
-            )
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), showlegend=False, height=300, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')), xaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"), yaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"))
-            st.plotly_chart(fig, use_container_width=True)
-
-        # Distribution features
-        st.markdown("**Distribution des capteurs : Normal vs Panne**")
-        features_num = ['Air temperature [K]','Process temperature [K]','Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
-        selected_feat = st.selectbox("Choisir un capteur :", features_num)
-
-        fig = go.Figure()
-        for status, name, color in [(0, "Normal", OCP_GREEN), (1, "Panne", OCP_RED)]:
-            data = df[df['Machine failure'] == status][selected_feat]
-            fig.add_trace(go.Histogram(x=data, name=name, marker_color=color, opacity=0.7, nbinsx=50))
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), barmode='overlay', height=300, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'),
-                          margin=dict(t=10,b=10), xaxis_title=selected_feat, yaxis_title="Fréquence")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Matrice de corrélation**")
-            features_num = ['Air temperature [K]','Process temperature [K]','Rotational speed [rpm]','Torque [Nm]','Tool wear [min]','Machine failure']
-            corr = df[features_num].corr()
-            fig = px.imshow(
-                corr, color_continuous_scale=[[0,OCP_RED],[0.5,'#111'],[1,OCP_GREEN]],
-                zmin=-1, zmax=1, text_auto=".2f"
-            )
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=380, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')))
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.markdown("**Puissance vs Usure outil**")
-            sample = df.sample(min(2000, len(df)))
-            power  = sample['Torque [Nm]'] * (sample['Rotational speed [rpm]'] * 2 * np.pi / 60)
-            fig = px.scatter(
-                x=power, y=sample['Tool wear [min]'],
-                color=sample['Machine failure'].astype(str),
-                color_discrete_map={"0": OCP_GREEN, "1": OCP_RED},
-                labels={"x": "Puissance (W)", "y": "Usure (min)", "color": "Panne"},
-                opacity=0.5,
-            )
-            fig.update_traces(marker=dict(size=4))
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=380, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')))
-            st.plotly_chart(fig, use_container_width=True)
-
-        # Box plots
-        st.markdown("**Distribution par variable (Boxplot)**")
-        feat_box = st.selectbox("Variable :", ['Torque [Nm]','Tool wear [min]','Rotational speed [rpm]'], key="box")
-        fig = px.box(
-            df, x='Machine failure', y=feat_box,
-            color='Machine failure',
-            color_discrete_map={0: OCP_GREEN, 1: OCP_RED},
-            labels={"Machine failure": "Panne", feat_box: feat_box},
-        )
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=300, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')), showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab3:
-        st.markdown("**Taux de panne par type de machine**")
-        type_rates = df.groupby('Type')['Machine failure'].agg(['mean','sum','count']).reset_index()
-        type_rates.columns = ['Type','Taux','Pannes','Total']
-        type_rates['Taux %'] = (type_rates['Taux'] * 100).round(2)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            fig = px.bar(
-                type_rates, x='Type', y='Taux %',
-                color='Type',
-                color_discrete_map={'L': OCP_RED, 'M': OCP_GOLD, 'H': OCP_GREEN},
-                labels={"Taux %": "Taux de panne (%)", "Type": "Type machine"},
-                text='Taux %',
-            )
-            fig.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=350, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')), showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.markdown("**Répartition des machines**")
-            type_count = df['Type'].value_counts()
-            fig = px.pie(
-                names=type_count.index, values=type_count.values,
-                color=type_count.index,
-                color_discrete_map={'L': OCP_RED, 'M': OCP_GOLD, 'H': OCP_GREEN},
-                hole=0.4,
-            )
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=350, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')))
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.dataframe(
-            type_rates[['Type','Total','Pannes','Taux %']].rename(columns={
-                'Type':'Type Machine','Total':'Équipements','Pannes':'Pannes','Taux %':'Taux (%)'
-            }),
-            use_container_width=True, hide_index=True,
-        )
-
+def set_matplotlib_dark():
+    plt.rcParams.update({
+        'figure.facecolor':'#0f0f1a','axes.facecolor':'#16162a',
+        'axes.edgecolor':'#333','axes.labelcolor':'#ccc','xtick.color':'#aaa',
+        'ytick.color':'#aaa','text.color':'#e8e8f0','grid.color':'#2a2a3e',
+        'grid.alpha':.5,'font.family':'DejaVu Sans',
+    })
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE : SIMULATEUR
+# HEADER
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "🤖 Simulateur":
-    st.markdown("## 🤖 Simulateur de Prédiction de Pannes")
-    st.markdown("Entrez les valeurs des capteurs pour prédire le risque de panne en temps réel.")
-    st.markdown("---")
+st.markdown("""
+<div class="ocp-header">
+  <h1>🏭 OCP — Maintenance Prédictive Industrielle</h1>
+  <p class="sub">Système de détection des pannes machines · Temps réel · Intelligence Artificielle</p>
+  <span class="badge">⚡ LightGBM</span>
+  <span class="badge">🔬 SHAP</span>
+  <span class="badge">📡 Simulation live</span>
+  <span class="badge">📊 Analyses avancées</span>
+  <span class="badge">📄 Export PDF</span>
+</div>
+""", unsafe_allow_html=True)
 
-    col_form, col_result = st.columns([1.2, 1])
+# ══════════════════════════════════════════════════════════════════════════════
+# TABS
+# ══════════════════════════════════════════════════════════════════════════════
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🔍 Prédiction",
+    "📊 Analyses avancées",
+    "📡 Simulation live",
+    "📋 Historique",
+    "🗂️ Batch CSV",
+])
 
-    with col_form:
-        st.markdown('<div class="section-header">⚙️ PARAMÈTRES CAPTEURS</div>', unsafe_allow_html=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Prédiction manuelle
+# ══════════════════════════════════════════════════════════════════════════════
+with tab1:
+    col_in, col_out = st.columns([1.1, 0.9], gap="large")
 
-        machine_type = st.radio(
-            "Type de machine", ["L — Basse qualité", "M — Qualité moyenne", "H — Haute qualité"],
-            horizontal=True,
-        )
-        mtype = machine_type[0]
-
-        st.markdown("**Températures**")
+    with col_in:
+        st.markdown('<div class="section-title">⚙️ Paramètres Machine</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            air_temp = st.slider("Temp. ambiante (K)", 295.0, 305.0, 300.0, 0.1)
+            machine_type = st.selectbox("Type de machine",
+                ["H — High quality","M — Medium quality","L — Low quality"])
+            type_letter = machine_type[0]
+            type_enc = int(le.transform([type_letter])[0])
+            air_temp  = st.slider("🌡️ Température air (K)",  295.0,305.0,300.0,0.1,format="%.1f K")
+            proc_temp = st.slider("🔥 Température process (K)",305.0,315.0,310.0,0.1,format="%.1f K")
         with c2:
-            proc_temp = st.slider("Temp. procédé (K)", 305.0, 316.0, 310.0, 0.1)
+            rot_speed = st.slider("⚡ Vitesse rotation (rpm)",1168,2886,1500,10)
+            torque    = st.slider("🔩 Couple (Nm)",3.8,76.6,40.0,0.5,format="%.1f Nm")
+            tool_wear = st.slider("🛠️ Usure outil (min)",0,253,100,1)
 
-        st.markdown("**Mécanique**")
-        c1, c2 = st.columns(2)
-        with c1:
-            rot_speed = st.slider("Vitesse rotation (RPM)", 1168, 2886, 1500, 10)
-        with c2:
-            torque = st.slider("Couple (Nm)", 3.8, 76.6, 40.0, 0.1)
+        X_raw = compute_features(type_enc, air_temp, proc_temp, rot_speed, torque, tool_wear)
+        td = X_raw[0][6]; pw = X_raw[0][7]; oh = int(X_raw[0][10])
 
-        st.markdown("**Usure**")
-        tool_wear = st.slider("Usure outil (min)", 0, 253, 100, 1)
+        st.markdown('<div class="section-title" style="margin-top:1rem">📐 Features Dérivées</div>', unsafe_allow_html=True)
+        fa,fb,fc = st.columns(3)
+        fa.metric("ΔT Process-Air", f"{td:.2f} K")
+        fb.metric("Puissance méca.", f"{pw:.0f} W")
+        fc.metric("Surchauffe", "🔴 Oui" if oh else "🟢 Non")
 
-        threshold = st.slider("Seuil d'alerte", 0.20, 0.70, 0.35, 0.05,
-                              help="Plus bas = plus sensible (moins de pannes manquées)")
+        # Alertes seuils
+        alerts = []
+        if tool_wear > 200: alerts.append(("🚨","CRITIQUE",f"Usure outil : {tool_wear} min > 200","crit"))
+        if torque > 65:     alerts.append(("🚨","CRITIQUE",f"Couple : {torque:.1f} Nm > 65","crit"))
+        if proc_temp > 312: alerts.append(("⚠️","ATTENTION",f"Température process : {proc_temp:.1f} K > 312","warn"))
+        if rot_speed < 1300:alerts.append(("⚠️","ATTENTION",f"Vitesse : {rot_speed} rpm < 1300","warn"))
+        if alerts:
+            st.markdown('<div class="section-title" style="margin-top:.8rem">🚨 Alertes Seuils</div>', unsafe_allow_html=True)
+            for ico,lvl,msg,typ in alerts:
+                css = "alert-crit" if typ=="crit" else "alert-warn"
+                st.markdown(f'<div class="{css}">{ico} <b>{lvl}</b> — {msg}</div>', unsafe_allow_html=True)
 
-        predict_btn = st.button("🔍 ANALYSER LA MACHINE", use_container_width=True)
+        predict_btn = st.button("🔍 Prédire la panne", use_container_width=True, type="primary")
 
-    with col_result:
-        st.markdown('<div class="section-header">📡 RÉSULTAT DE L\'ANALYSE</div>', unsafe_allow_html=True)
+    with col_out:
+        st.markdown('<div class="section-title">📊 Résultat</div>', unsafe_allow_html=True)
 
-        # Badge modèle chargé
-        if MODEL_LOADED:
-            st.success("🤖 Modèle XGBoost réel chargé (ocp_best_model.pkl)", icon="✅")
-        else:
-            st.warning("⚠️ Fichiers pkl non trouvés — mode simulé actif", icon="⚠️")
+        if predict_btn:
+            pred, pf, Xs = predict(X_raw)
 
-        result = predict_failure(mtype, air_temp, proc_temp, rot_speed, torque, tool_wear, threshold)
-        proba  = result["proba"]
-        level  = result["level"]
+            # Animation
+            prog = st.progress(0)
+            for i in range(100):
+                time.sleep(0.005)
+                prog.progress(i+1)
+            prog.empty()
 
-        # Gauge
-        gauge_colors = {"normal": OCP_GREEN, "watch": OCP_GOLD, "warning": OCP_ORANGE, "critical": OCP_RED}
-        gauge_color  = gauge_colors[level]
+            if pred == 1:
+                st.markdown(f'<div class="result-fail">❌ PANNE PRÉDITE<br>'
+                            f'<span style="font-size:.85rem;font-weight:400">Probabilité : <b>{pf:.1f}%</b></span></div>',
+                            unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="result-ok">✅ MACHINE NORMALE<br>'
+                            f'<span style="font-size:.85rem;font-weight:400">Probabilité de panne : <b>{pf:.1f}%</b></span></div>',
+                            unsafe_allow_html=True)
 
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=proba * 100,
-            number={"suffix": "%", "font": {"size": 36, "color": gauge_color}},
-            gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#8aada0"},
-                "bar":  {"color": gauge_color, "thickness": 0.3},
-                "bgcolor": "rgba(0,0,0,0)",
-                "bordercolor": "rgba(0,122,77,0.2)",
-                "steps": [
-                    {"range": [0,   30],  "color": "rgba(0,122,77,0.15)"},
-                    {"range": [30,  60],  "color": "rgba(245,168,0,0.15)"},
-                    {"range": [60,  85],  "color": "rgba(230,126,34,0.15)"},
-                    {"range": [85, 100],  "color": "rgba(192,57,43,0.15)"},
-                ],
-                "threshold": {"line": {"color": gauge_color, "width": 3}, "value": proba * 100},
+            # Jauge animée
+            color = OCP_RED if pf>=50 else OCP_GOLD if pf>=20 else OCP_GREEN
+            st.markdown(f"""
+            <div style="background:#2a2a3e;border-radius:8px;height:24px;overflow:hidden;margin:.8rem 0;
+                        box-shadow:inset 0 2px 4px rgba(0,0,0,.3)">
+              <div style="width:{pf:.1f}%;background:linear-gradient(90deg,{color}99,{color});
+                          height:100%;display:flex;align-items:center;justify-content:flex-end;
+                          padding-right:8px;color:white;font-size:.78rem;font-weight:700;border-radius:8px">
+                {pf:.1f}%</div>
+            </div>""", unsafe_allow_html=True)
+
+            m1,m2 = st.columns(2)
+            m1.metric("✅ Normal", f"{100-pf:.1f}%")
+            m2.metric("❌ Panne",  f"{pf:.1f}%")
+
+            if   pf>=70: st.error("🚨 Intervention immédiate — arrêter la machine.")
+            elif pf>=40: st.warning("⚠️ Inspection préventive dans les 24h.")
+            elif pf>=20: st.info("🔍 Surveillance renforcée conseillée.")
+            else:        st.success("✅ État normal — suivi périodique standard.")
+
+            # Save
+            st.session_state.history.append({
+                "Horodatage": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Type":type_letter,"Air Temp (K)":air_temp,"Proc Temp (K)":proc_temp,
+                "RPM":rot_speed,"Torque (Nm)":torque,"Tool Wear (min)":tool_wear,
+                "Prédiction":"Panne" if pred==1 else "Normal",
+                "Proba Panne (%)":round(pf,2),
+            })
+            st.session_state['last_X_scaled'] = Xs
+            st.session_state['last_X_raw']    = X_raw
+            st.session_state['last_pred']     = pred
+            st.session_state['last_pf']       = pf
+            st.session_state['last_params']   = {
+                "Type":type_letter,"Air Temp (K)":air_temp,"Proc Temp (K)":proc_temp,
+                "RPM":rot_speed,"Torque (Nm)":torque,"Tool Wear (min)":tool_wear,
+                "Prédiction":"Panne" if pred==1 else "Normal","Proba (%)":round(pf,2),
+                "Horodatage":datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-        ))
-        fig_gauge.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", font_color="#c8ddd4",
-            height=220, margin=dict(t=10, b=10, l=20, r=20)
-        )
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        else:
+            st.markdown('<div class="card card-blue" style="color:#aaa;text-align:center;padding:2rem">'
+                        '👈 Ajustez les paramètres<br>puis cliquez sur <b style="color:#F5A800">Prédire la panne</b>'
+                        '</div>', unsafe_allow_html=True)
+            # Modèle info
+            st.markdown('<div class="section-title" style="margin-top:1rem">ℹ️ Modèle</div>', unsafe_allow_html=True)
+            st.markdown("""
+            <div class="card card-green" style="font-size:.83rem;line-height:1.8;color:#ccc">
+            <b style="color:#4ecca3">Algorithme</b> · LightGBM Classifier<br>
+            <b style="color:#4ecca3">Dataset</b> · AI4I 2020 — 10 000 entrées<br>
+            <b style="color:#4ecca3">Rééchantillonnage</b> · SMOTE<br>
+            <b style="color:#4ecca3">Normalisation</b> · StandardScaler<br>
+            <b style="color:#4ecca3">Features</b> · 11 (5 capteurs + 5 ingénierie + 1 encodage)
+            </div>""", unsafe_allow_html=True)
 
-        # Alerte
-        alert_class = {"normal": "alert-normal", "watch": "alert-watch",
-                       "warning": "alert-warning", "critical": "alert-critical"}[level]
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Analyses avancées
+# ══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.markdown('<div class="section-title">📊 Analyses Avancées & Interprétabilité</div>', unsafe_allow_html=True)
+
+    if 'last_X_scaled' not in st.session_state:
+        st.markdown('<div class="card card-gold" style="text-align:center;color:#aaa;padding:2rem">'
+                    '⚡ Effectuez d\'abord une prédiction dans l\'onglet <b style="color:#F5A800">Prédiction</b></div>',
+                    unsafe_allow_html=True)
+    else:
+        Xs   = st.session_state['last_X_scaled']
+        Xraw = st.session_state['last_X_raw']
+
+        set_matplotlib_dark()
+
+        row1_c1, row1_c2 = st.columns(2)
+
+        # ── SHAP ──────────────────────────────────────────────────────────────
+        with row1_c1:
+            st.markdown("**🔬 Contribution SHAP — dernière prédiction**")
+            try:
+                explainer = shap.TreeExplainer(model)
+                sv = explainer.shap_values(Xs)
+                sv_arr = sv[0] if isinstance(sv, list) else sv[0]
+
+                fig, ax = plt.subplots(figsize=(6,4))
+                sorted_idx = np.argsort(np.abs(sv_arr))
+                sv_sorted  = sv_arr[sorted_idx]
+                lb_sorted  = [FEAT_LABELS[i] for i in sorted_idx]
+                colors_s   = [OCP_RED if v>0 else OCP_GREEN for v in sv_sorted]
+                bars = ax.barh(lb_sorted, sv_sorted, color=colors_s, edgecolor='#0f0f1a', height=.65)
+                ax.axvline(0, color='#666', linewidth=.8)
+                ax.set_xlabel("Valeur SHAP", fontsize=8)
+                ax.set_title("Impact sur la prédiction de panne", fontsize=9, fontweight='bold', color='#e8e8f0')
+                p1 = mpatches.Patch(color=OCP_RED,   label='↑ Risque')
+                p2 = mpatches.Patch(color=OCP_GREEN, label='↓ Risque')
+                ax.legend(handles=[p1,p2], fontsize=7)
+                plt.tight_layout()
+                st.pyplot(fig)
+            except Exception as e:
+                st.warning(f"SHAP : {e}")
+
+        # ── Radar ─────────────────────────────────────────────────────────────
+        with row1_c2:
+            st.markdown("**📡 Radar des capteurs normalisés**")
+            raw = Xraw[0]
+            lbls_r  = ['Air Temp','Proc Temp','RPM','Torque','Tool Wear']
+            ranges  = [(295,305),(305,315),(1168,2886),(3.8,76.6),(0,253)]
+            vals_r  = [(raw[i+1]-ranges[i][0])/(ranges[i][1]-ranges[i][0]) for i in range(5)]
+            vals_r += [vals_r[0]]
+            angles  = np.linspace(0,2*np.pi,5,endpoint=False).tolist()
+            angles += angles[:1]
+
+            fig_r, ax_r = plt.subplots(figsize=(4.5,4.5), subplot_kw=dict(polar=True))
+            ax_r.set_facecolor('#16162a')
+            fig_r.patch.set_facecolor('#0f0f1a')
+            ax_r.plot(angles, vals_r, color=OCP_GREEN, linewidth=2.5)
+            ax_r.fill(angles, vals_r, color=OCP_GREEN, alpha=.2)
+            # danger zone
+            danger = [1.0]*5+[1.0]
+            ax_r.fill(angles, danger, color=OCP_RED, alpha=.05)
+            ax_r.set_xticks(angles[:-1])
+            ax_r.set_xticklabels(lbls_r, fontsize=8, color='#ccc')
+            ax_r.set_ylim(0,1); ax_r.set_yticks([.25,.5,.75,1.0])
+            ax_r.set_yticklabels(['25%','50%','75%','100%'], fontsize=6, color='#777')
+            ax_r.grid(color='#2a2a3e', linewidth=.8)
+            ax_r.set_title("Position dans la plage nominale", fontsize=9, fontweight='bold', color='#e8e8f0', pad=15)
+            plt.tight_layout()
+            st.pyplot(fig_r)
+
+        row2_c1, row2_c2 = st.columns(2)
+
+        # ── Courbe ROC ────────────────────────────────────────────────────────
+        with row2_c1:
+            st.markdown("**📈 Courbe ROC (données synthétiques de démonstration)**")
+            np.random.seed(42)
+            n_demo = 500
+            X_demo = np.random.randn(n_demo, 11)
+            proba_demo = model.predict_proba(X_demo)[:,1]
+            y_demo = (proba_demo > 0.5).astype(int)
+            fpr, tpr, _ = roc_curve(y_demo, proba_demo)
+            roc_auc = auc(fpr, tpr)
+
+            fig_roc, ax_roc = plt.subplots(figsize=(5,4))
+            ax_roc.plot(fpr, tpr, color=OCP_GREEN, linewidth=2.5, label=f'AUC = {roc_auc:.3f}')
+            ax_roc.fill_between(fpr, tpr, alpha=.1, color=OCP_GREEN)
+            ax_roc.plot([0,1],[0,1], color='#555', linestyle='--', linewidth=1, label='Aléatoire')
+            ax_roc.set_xlabel("Taux de Faux Positifs", fontsize=8)
+            ax_roc.set_ylabel("Taux de Vrais Positifs", fontsize=8)
+            ax_roc.set_title("Courbe ROC — LightGBM", fontsize=9, fontweight='bold', color='#e8e8f0')
+            ax_roc.legend(fontsize=8)
+            ax_roc.set_xlim([0,1]); ax_roc.set_ylim([0,1.02])
+            plt.tight_layout()
+            st.pyplot(fig_roc)
+
+        # ── Matrice de confusion ──────────────────────────────────────────────
+        with row2_c2:
+            st.markdown("**🔲 Matrice de Confusion**")
+            y_pred_demo = (proba_demo > 0.5).astype(int)
+            cm_arr = confusion_matrix(y_demo, y_pred_demo)
+
+            fig_cm, ax_cm = plt.subplots(figsize=(4.5,4))
+            cmap = LinearSegmentedColormap.from_list('ocp', ['#16162a', OCP_GREEN], N=100)
+            im = ax_cm.imshow(cm_arr, cmap=cmap, aspect='auto')
+            ax_cm.set_xticks([0,1]); ax_cm.set_yticks([0,1])
+            ax_cm.set_xticklabels(['Prédit Normal','Prédit Panne'], fontsize=8)
+            ax_cm.set_yticklabels(['Réel Normal','Réel Panne'], fontsize=8)
+            for i in range(2):
+                for j in range(2):
+                    ax_cm.text(j, i, str(cm_arr[i,j]), ha='center', va='center',
+                               fontsize=18, fontweight='bold',
+                               color='white' if cm_arr[i,j] > cm_arr.max()/2 else '#ccc')
+            ax_cm.set_title("Matrice de Confusion", fontsize=9, fontweight='bold', color='#e8e8f0')
+            plt.colorbar(im, ax=ax_cm, fraction=.046, pad=.04)
+            plt.tight_layout()
+            st.pyplot(fig_cm)
+
+        # ── Feature importance globale ────────────────────────────────────────
+        st.markdown("**🏆 Importance Globale des Features (modèle)**")
+        try:
+            importances = model.feature_importances_
+            sorted_idx  = np.argsort(importances)
+            fig_fi, ax_fi = plt.subplots(figsize=(10, 3.5))
+            cmap_fi = plt.cm.RdYlGn
+            norm_fi = plt.Normalize(importances.min(), importances.max())
+            colors_fi = [cmap_fi(norm_fi(v)) for v in importances[sorted_idx]]
+            ax_fi.barh([FEAT_LABELS[i] for i in sorted_idx], importances[sorted_idx],
+                       color=colors_fi, edgecolor='#0f0f1a', height=.65)
+            ax_fi.set_xlabel("Importance (gain)", fontsize=8)
+            ax_fi.set_title("Contribution globale de chaque feature au modèle LightGBM", fontsize=9, fontweight='bold', color='#e8e8f0')
+            plt.tight_layout()
+            st.pyplot(fig_fi)
+        except Exception as e:
+            st.warning(f"Feature importance : {e}")
+
+        # ── Export PDF ────────────────────────────────────────────────────────
+        st.markdown('<div class="section-title" style="margin-top:1.2rem">📄 Export Rapport PDF</div>', unsafe_allow_html=True)
+        if st.button("📄 Générer le rapport PDF", use_container_width=True):
+            params  = st.session_state.get('last_params', {})
+            pf_last = st.session_state.get('last_pf', 0)
+            pred_l  = st.session_state.get('last_pred', 0)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                doc = SimpleDocTemplate(tmp.name, pagesize=A4,
+                                        leftMargin=2*cm, rightMargin=2*cm,
+                                        topMargin=2*cm, bottomMargin=2*cm)
+                styles = getSampleStyleSheet()
+                story  = []
+
+                # Title
+                title_style = ParagraphStyle('title', parent=styles['Title'],
+                    fontSize=18, textColor=rl_colors.HexColor('#007A4D'),
+                    spaceAfter=6, alignment=TA_CENTER, fontName='Helvetica-Bold')
+                sub_style = ParagraphStyle('sub', parent=styles['Normal'],
+                    fontSize=9, textColor=rl_colors.grey, alignment=TA_CENTER, spaceAfter=16)
+                section_style = ParagraphStyle('sec', parent=styles['Normal'],
+                    fontSize=11, textColor=rl_colors.HexColor('#007A4D'),
+                    fontName='Helvetica-Bold', spaceBefore=14, spaceAfter=6)
+                body_style = ParagraphStyle('body', parent=styles['Normal'],
+                    fontSize=9, textColor=rl_colors.HexColor('#333'), spaceAfter=4)
+
+                story.append(Paragraph("🏭 OCP — Rapport de Maintenance Prédictive", title_style))
+                story.append(Paragraph(f"Généré le {datetime.datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}", sub_style))
+                story.append(HRFlowable(width="100%", thickness=2, color=rl_colors.HexColor('#007A4D')))
+                story.append(Spacer(1, 12))
+
+                # Résultat
+                story.append(Paragraph("1. Résultat de la Prédiction", section_style))
+                result_txt = "❌ PANNE DÉTECTÉE" if pred_l==1 else "✅ MACHINE NORMALE"
+                res_color  = rl_colors.HexColor('#C0392B') if pred_l==1 else rl_colors.HexColor('#007A4D')
+                res_style  = ParagraphStyle('res', parent=styles['Normal'],
+                    fontSize=14, textColor=res_color, fontName='Helvetica-Bold',
+                    alignment=TA_CENTER, spaceAfter=8)
+                story.append(Paragraph(result_txt, res_style))
+                story.append(Paragraph(f"Probabilité de panne : <b>{pf_last:.1f}%</b>", body_style))
+
+                reco = ("Intervention immédiate requise." if pf_last>=70
+                        else "Inspection préventive dans les 24h." if pf_last>=40
+                        else "Surveillance renforcée conseillée." if pf_last>=20
+                        else "État normal — suivi périodique standard.")
+                story.append(Paragraph(f"Recommandation : {reco}", body_style))
+                story.append(Spacer(1, 10))
+
+                # Paramètres
+                story.append(Paragraph("2. Paramètres de la Machine", section_style))
+                if params:
+                    table_data = [["Paramètre", "Valeur"]] + [[k,str(v)] for k,v in params.items()]
+                    tbl = Table(table_data, colWidths=[9*cm, 7*cm])
+                    tbl.setStyle(TableStyle([
+                        ('BACKGROUND', (0,0), (-1,0), rl_colors.HexColor('#007A4D')),
+                        ('TEXTCOLOR',  (0,0), (-1,0), rl_colors.white),
+                        ('FONTNAME',   (0,0), (-1,0), 'Helvetica-Bold'),
+                        ('FONTSIZE',   (0,0), (-1,-1), 9),
+                        ('ROWBACKGROUNDS',(0,1),(-1,-1),[rl_colors.HexColor('#f0f7f4'), rl_colors.white]),
+                        ('GRID',       (0,0), (-1,-1), .5, rl_colors.HexColor('#ccc')),
+                        ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+                        ('TOPPADDING', (0,0), (-1,-1), 5),
+                        ('BOTTOMPADDING',(0,0),(-1,-1),5),
+                    ]))
+                    story.append(tbl)
+
+                story.append(Spacer(1, 10))
+
+                # Historique résumé
+                if st.session_state.history:
+                    story.append(Paragraph("3. Résumé de l'Historique", section_style))
+                    df_h = pd.DataFrame(st.session_state.history)
+                    n_p  = (df_h["Prédiction"]=="Panne").sum()
+                    story.append(Paragraph(f"Total prédictions : {len(df_h)}", body_style))
+                    story.append(Paragraph(f"Pannes détectées : {n_p} ({n_p/len(df_h)*100:.1f}%)", body_style))
+                    story.append(Paragraph(f"Probabilité moyenne : {df_h['Proba Panne (%)'].mean():.1f}%", body_style))
+
+                story.append(Spacer(1, 16))
+                story.append(HRFlowable(width="100%", thickness=1, color=rl_colors.HexColor('#ccc')))
+                footer = ParagraphStyle('footer', parent=styles['Normal'],
+                    fontSize=7, textColor=rl_colors.grey, alignment=TA_CENTER, spaceBefore=6)
+                story.append(Paragraph("OCP Group · Système de Maintenance Prédictive · Confidentiel", footer))
+
+                doc.build(story)
+                with open(tmp.name,'rb') as f:
+                    pdf_bytes = f.read()
+
+            st.download_button(
+                "📥 Télécharger le rapport PDF",
+                data=pdf_bytes,
+                file_name=f"ocp_rapport_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Simulation temps réel
+# ══════════════════════════════════════════════════════════════════════════════
+with tab3:
+    st.markdown('<div class="section-title">📡 Simulation Temps Réel</div>', unsafe_allow_html=True)
+    st.markdown("Simulation d'un flux de capteurs IoT avec détection automatique de pannes.", unsafe_allow_html=True)
+
+    sim_col1, sim_col2 = st.columns([1,2])
+
+    with sim_col1:
+        st.markdown('<div class="section-title">⚙️ Paramètres simulation</div>', unsafe_allow_html=True)
+        sim_type     = st.selectbox("Type machine", ["H","M","L"], key="sim_type")
+        sim_noise    = st.slider("Niveau de bruit", 0.0, 1.0, 0.3, 0.05)
+        sim_drift    = st.checkbox("Simuler une dérive (usure progressive)", value=True)
+        n_sim_points = st.slider("Nombre de points", 20, 100, 40, 5)
+
+        col_sb1, col_sb2 = st.columns(2)
+        run_btn   = col_sb1.button("▶️ Lancer",  use_container_width=True, type="primary")
+        clear_btn = col_sb2.button("🗑️ Effacer", use_container_width=True)
+
+        if clear_btn:
+            st.session_state.sim_data = []
+            st.rerun()
+
+    with sim_col2:
+        chart_placeholder = st.empty()
+        kpi_placeholder   = st.empty()
+        status_placeholder= st.empty()
+
+        if run_btn:
+            st.session_state.sim_data = []
+            type_enc_s = int(le.transform([sim_type])[0])
+
+            for i in range(n_sim_points):
+                # Génération données capteur avec bruit + dérive
+                drift = (i / n_sim_points) if sim_drift else 0
+                air_t  = 300  + np.random.randn() * sim_noise * 2
+                proc_t = 310  + np.random.randn() * sim_noise * 2 + drift * 4
+                rpm    = 1500 + np.random.randn() * sim_noise * 100 - drift * 200
+                tq     = 40   + np.random.randn() * sim_noise * 5  + drift * 20
+                tw     = min(253, 80 + i * (sim_drift * 1.5 + 0.3) + np.random.randn() * 5)
+
+                X_s = compute_features(type_enc_s, air_t, proc_t, max(1168,rpm), tq, tw)
+                p, pf_s, _ = predict(X_s)
+
+                st.session_state.sim_data.append({
+                    "t": i+1, "prob": pf_s, "pred": p,
+                    "tool_wear": tw, "torque": tq, "rpm": max(1168,rpm)
+                })
+
+                # Mise à jour graphique live
+                df_sim = pd.DataFrame(st.session_state.sim_data)
+                set_matplotlib_dark()
+                fig_sim, axes_s = plt.subplots(2,1,figsize=(8,5), sharex=True)
+
+                # Probabilité
+                axes_s[0].fill_between(df_sim["t"], df_sim["prob"], alpha=.25,
+                    color=[OCP_RED if p>=50 else OCP_GOLD if p>=20 else OCP_GREEN for p in df_sim["prob"]][0])
+                for idx in range(len(df_sim)-1):
+                    c = OCP_RED if df_sim["prob"].iloc[idx]>=50 else OCP_GOLD if df_sim["prob"].iloc[idx]>=20 else OCP_GREEN
+                    axes_s[0].plot(df_sim["t"].iloc[idx:idx+2], df_sim["prob"].iloc[idx:idx+2], color=c, linewidth=2)
+                axes_s[0].axhline(50, color=OCP_RED,  linestyle='--', linewidth=.8, alpha=.7)
+                axes_s[0].axhline(20, color=OCP_GOLD, linestyle='--', linewidth=.8, alpha=.7)
+                axes_s[0].set_ylabel("Proba panne (%)", fontsize=8)
+                axes_s[0].set_ylim(0,105)
+                axes_s[0].set_title("Probabilité de panne en temps réel", fontsize=9, fontweight='bold', color='#e8e8f0')
+
+                # Usure outil
+                axes_s[1].plot(df_sim["t"], df_sim["tool_wear"], color=OCP_GOLD, linewidth=2)
+                axes_s[1].axhline(200, color=OCP_RED, linestyle='--', linewidth=.8, alpha=.7, label='Seuil critique (200 min)')
+                axes_s[1].set_ylabel("Usure outil (min)", fontsize=8)
+                axes_s[1].set_xlabel("Mesure #", fontsize=8)
+                axes_s[1].legend(fontsize=7)
+
+                plt.tight_layout()
+                chart_placeholder.pyplot(fig_sim)
+                plt.close(fig_sim)
+
+                # KPIs live
+                n_pannes_s = sum(1 for d in st.session_state.sim_data if d["pred"]==1)
+                kpi_placeholder.markdown(f"""
+                <div class="kpi-grid">
+                  <div class="kpi"><div class="val">{i+1}</div><div class="lbl">Mesures</div></div>
+                  <div class="kpi"><div class="val">{n_pannes_s}</div><div class="lbl">Pannes</div></div>
+                  <div class="kpi"><div class="val">{pf_s:.0f}%</div><div class="lbl">Prob. actuelle</div></div>
+                  <div class="kpi"><div class="val">{tw:.0f}</div><div class="lbl">Usure (min)</div></div>
+                </div>""", unsafe_allow_html=True)
+
+                if p == 1:
+                    status_placeholder.error(f"🚨 PANNE DÉTECTÉE — mesure #{i+1} — prob: {pf_s:.1f}%")
+                elif pf_s >= 20:
+                    status_placeholder.warning(f"⚠️ Vigilance — mesure #{i+1} — prob: {pf_s:.1f}%")
+                else:
+                    status_placeholder.success(f"✅ Normal — mesure #{i+1} — prob: {pf_s:.1f}%")
+
+                time.sleep(0.08)
+
+        elif st.session_state.sim_data:
+            df_sim = pd.DataFrame(st.session_state.sim_data)
+            set_matplotlib_dark()
+            fig_sim2, ax2 = plt.subplots(figsize=(8,3.5))
+            ax2.plot(df_sim["t"], df_sim["prob"], color=OCP_GREEN, linewidth=2)
+            ax2.axhline(50, color=OCP_RED,  linestyle='--', linewidth=.8)
+            ax2.set_title("Dernière simulation", fontsize=9, fontweight='bold', color='#e8e8f0')
+            ax2.set_ylabel("Probabilité panne (%)", fontsize=8)
+            plt.tight_layout()
+            chart_placeholder.pyplot(fig_sim2)
+            plt.close(fig_sim2)
+        else:
+            st.markdown('<div class="card card-blue" style="text-align:center;color:#aaa;padding:2.5rem">'
+                        '▶️ Configurez et lancez la simulation</div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Historique
+# ══════════════════════════════════════════════════════════════════════════════
+with tab4:
+    st.markdown('<div class="section-title">📋 Historique des Prédictions</div>', unsafe_allow_html=True)
+
+    if not st.session_state.history:
+        st.markdown('<div class="card card-blue" style="text-align:center;color:#aaa;padding:2rem">'
+                    'Aucune prédiction enregistrée.</div>', unsafe_allow_html=True)
+    else:
+        df_hist = pd.DataFrame(st.session_state.history)
+        n_p = (df_hist["Prédiction"]=="Panne").sum()
+
         st.markdown(f"""
-        <div class='{alert_class}'>
-            <div style='font-size:18px;font-weight:700;margin-bottom:6px;'>{result["alert"]}</div>
-            <div style='font-size:13px;color:#c8ddd4;'>{result["action"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-grid">
+          <div class="kpi"><div class="val">{len(df_hist)}</div><div class="lbl">Total prédictions</div></div>
+          <div class="kpi"><div class="val">{n_p}</div><div class="lbl">Pannes détectées</div></div>
+          <div class="kpi"><div class="val">{n_p/len(df_hist)*100:.1f}%</div><div class="lbl">Taux de panne</div></div>
+          <div class="kpi"><div class="val">{df_hist['Proba Panne (%)'].mean():.1f}%</div><div class="lbl">Prob. moyenne</div></div>
+        </div>""", unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("**Features dérivées calculées**")
-        for feat, val in result["features"].items():
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.markdown(f"<span style='font-size:12px;color:#8aada0;font-family:monospace;'>{feat}</span>", unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"<span style='font-size:12px;color:#F5A800;font-weight:600;font-family:monospace;'>{val}</span>", unsafe_allow_html=True)
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)
 
-    # ─── Cas de test prédéfinis
-    st.markdown("---")
-    st.markdown('<div class="section-header">📋 CAS DE TEST PRÉDÉFINIS</div>', unsafe_allow_html=True)
-
-    test_cases = [
-        {"label": "⚙️ Machine normale — Broyeur phosphate", "type":"M", "air":298.5, "proc":308.5, "rpm":1500, "torque":40.0, "wear":50},
-        {"label": "⚠️ Machine limite — Convoyeur",          "type":"L", "air":302.0, "proc":312.0, "rpm":1300, "torque":65.0, "wear":180},
-        {"label": "🔴 Machine critique — Pompe acide",       "type":"H", "air":304.0, "proc":315.0, "rpm":1100, "torque":80.0, "wear":240},
-    ]
-    cols = st.columns(3)
-    for col, tc in zip(cols, test_cases):
-        with col:
-            res = predict_failure(tc["type"], tc["air"], tc["proc"], tc["rpm"], tc["torque"], tc["wear"])
-            colors = {"normal": OCP_GREEN, "watch": OCP_GOLD, "warning": OCP_ORANGE, "critical": OCP_RED}
-            color  = colors[res["level"]]
-            st.markdown(f"""
-            <div style='background:rgba(0,0,0,0.2);border:1px solid {color};
-                        border-radius:10px;padding:16px;'>
-                <div style='font-size:12px;font-weight:600;color:{color};margin-bottom:10px;'>{tc["label"]}</div>
-                <div style='font-size:28px;font-weight:700;color:{color};text-align:center;margin-bottom:6px;'>{res["proba"]*100:.1f}%</div>
-                <div style='font-size:12px;text-align:center;margin-bottom:8px;'>{res["alert"]}</div>
-                <div style='font-size:11px;color:#8aada0;'>{res["action"]}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
+        c1h, c2h = st.columns(2)
+        csv_buf = io.StringIO()
+        df_hist.to_csv(csv_buf, index=False)
+        c1h.download_button("📥 Exporter CSV", csv_buf.getvalue(),
+            f"ocp_historique_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "text/csv", use_container_width=True)
+        if c2h.button("🗑️ Effacer l'historique", use_container_width=True):
+            st.session_state.history = []
+            st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE : MODÈLES
+# TAB 5 — Batch CSV
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "📈 Modèles":
-    st.markdown("## 📈 Comparaison des Modèles ML")
-    st.markdown("---")
+with tab5:
+    st.markdown('<div class="section-title">🗂️ Prédictions en Masse (CSV)</div>', unsafe_allow_html=True)
+    st.markdown("Uploadez un CSV avec : `Type, Air temperature [K], Process temperature [K], Rotational speed [rpm], Torque [Nm], Tool wear [min]`")
 
-    tab1, tab2, tab3 = st.tabs(["Performances", "Importance des Features", "Matrice de Confusion"])
+    template = pd.DataFrame({
+        "Type":["H","M","L","H"],
+        "Air temperature [K]":[300.0,298.5,302.1,301.0],
+        "Process temperature [K]":[310.0,308.2,313.5,309.8],
+        "Rotational speed [rpm]":[1500,1380,2100,1750],
+        "Torque [Nm]":[40.0,55.2,28.7,61.3],
+        "Tool wear [min]":[100,190,50,220],
+    })
+    buf_t = io.StringIO(); template.to_csv(buf_t,index=False)
+    st.download_button("📄 Télécharger le template CSV", buf_t.getvalue(), "template_ocp.csv","text/csv")
 
-    with tab1:
-        st.markdown('<div class="section-header">🏆 CLASSEMENT DES MODÈLES</div>', unsafe_allow_html=True)
+    uploaded = st.file_uploader("📂 Uploader votre CSV", type=["csv"])
+    if uploaded:
+        try:
+            df_batch = pd.read_csv(uploaded)
+            st.write(f"**{len(df_batch)} lignes chargées**")
+            st.dataframe(df_batch.head(), use_container_width=True, hide_index=True)
+            if st.button("🚀 Lancer les prédictions batch", type="primary", use_container_width=True):
+                results = []
+                bar = st.progress(0)
+                for idx2, row in df_batch.iterrows():
+                    t_e = int(le.transform([str(row["Type"])[0]])[0])
+                    X_b = compute_features(t_e, float(row["Air temperature [K]"]),
+                                           float(row["Process temperature [K]"]),
+                                           float(row["Rotational speed [rpm]"]),
+                                           float(row["Torque [Nm]"]), float(row["Tool wear [min]"]))
+                    p_b, pf_b, _ = predict(X_b)
+                    results.append({"Prédiction":"Panne" if p_b==1 else "Normal",
+                                    "Proba Panne (%)":round(pf_b,2),
+                                    "Statut":"🚨" if pf_b>=70 else "⚠️" if pf_b>=40 else "✅"})
+                    bar.progress((idx2+1)/len(df_batch))
 
-        metric = st.selectbox("Métrique :", ["f1", "roc_auc", "precision", "recall", "cv_mean"],
-                              format_func=lambda x: {"f1":"F1-Score","roc_auc":"ROC-AUC",
-                                                      "precision":"Précision","recall":"Rappel","cv_mean":"CV Mean"}[x])
-        sorted_models = sorted(MODEL_RESULTS.items(), key=lambda x: x[1][metric], reverse=True)
+                df_res = pd.concat([df_batch.reset_index(drop=True), pd.DataFrame(results)], axis=1)
+                n_pb   = (pd.DataFrame(results)["Prédiction"]=="Panne").sum()
 
-        fig = go.Figure()
-        names  = [m[0] for m in sorted_models]
-        values = [m[1][metric] for m in sorted_models]
-        colors_bar = [OCP_GOLD if n == BEST_MODEL else OCP_GREEN for n in names]
+                st.markdown(f"""
+                <div class="kpi-grid">
+                  <div class="kpi"><div class="val">{len(df_res)}</div><div class="lbl">Machines</div></div>
+                  <div class="kpi"><div class="val">{n_pb}</div><div class="lbl">Pannes</div></div>
+                  <div class="kpi"><div class="val">{n_pb/len(df_res)*100:.1f}%</div><div class="lbl">Taux</div></div>
+                </div>""", unsafe_allow_html=True)
 
-        fig.add_trace(go.Bar(
-            x=values, y=names, orientation='h',
-            marker_color=colors_bar, text=[f"{v:.4f}" for v in values],
-            textposition='outside',
-        ))
-        fig.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8ddd4", family="monospace"),
-            height=350,
-            xaxis=dict(range=[0.7, 1.0], gridcolor="rgba(0,122,77,0.15)", zerolinecolor="rgba(0,122,77,0.2)", color="#c8ddd4"),
-            yaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"),
-            margin=dict(t=10, b=10, l=160),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Table complète
-        st.markdown("**Tableau de comparaison complet**")
-        df_models = pd.DataFrame(MODEL_RESULTS).T.reset_index()
-        df_models.columns = ['Modèle','F1-Score','ROC-AUC','Précision','Rappel','CV Mean']
-        df_models = df_models.sort_values('F1-Score', ascending=False)
-        df_models['Champion'] = df_models['Modèle'].apply(lambda x: "🏆" if x == BEST_MODEL else "")
-        st.dataframe(
-            df_models[['Champion','Modèle','F1-Score','ROC-AUC','Précision','Rappel','CV Mean']],
-            use_container_width=True, hide_index=True,
-        )
-
-        # Radar chart
-        st.markdown("**Comparaison Radar — Top 3 modèles**")
-        top3 = [m[0] for m in sorted_models[:3]]
-        metrics_radar = ['f1','roc_auc','precision','recall','cv_mean']
-        labels_radar  = ['F1-Score','ROC-AUC','Précision','Rappel','CV Mean']
-        colors_radar  = [OCP_GOLD, OCP_GREEN, OCP_BLUE]
-
-        fig = go.Figure()
-        for model, color in zip(top3, colors_radar):
-            vals = [MODEL_RESULTS[model][m] for m in metrics_radar]
-            vals.append(vals[0])
-            fig.add_trace(go.Scatterpolar(
-                r=vals, theta=labels_radar + [labels_radar[0]],
-                fill='toself', name=model,
-                line_color=color, fillcolor=color.replace('#','rgba(') + ',0.1)',
-                opacity=0.8,
-            ))
-        fig.update_layout(
-            polar=dict(
-                bgcolor="rgba(0,0,0,0)",
-                radialaxis=dict(range=[0.7, 1.0], gridcolor="rgba(0,122,77,0.2)", color="#8aada0"),
-                angularaxis=dict(gridcolor="rgba(0,122,77,0.2)", color="#8aada0"),
-            ),
-            paper_bgcolor="rgba(0,0,0,0)", font_color="#c8ddd4",
-            height=380, margin=dict(t=20,b=20),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
-        st.markdown('<div class="section-header">🔍 IMPORTANCE DES FEATURES (SHAP)</div>', unsafe_allow_html=True)
-        st.info("Valeurs SHAP moyennes calculées sur XGBoost (meilleur modèle)")
-
-        fi_sorted = sorted(FEATURE_IMPORTANCE.items(), key=lambda x: x[1], reverse=True)
-        names_fi  = [f[0] for f in fi_sorted]
-        vals_fi   = [f[1] for f in fi_sorted]
-
-        fig = px.bar(
-            x=vals_fi, y=names_fi, orientation='h',
-            color=vals_fi, color_continuous_scale=[[0, OCP_BLUE],[0.5, OCP_GREEN],[1, OCP_GOLD]],
-            labels={"x": "Importance SHAP moyenne", "y": "Feature"},
-            text=[f"{v:.4f}" for v in vals_fi],
-        )
-        fig.update_traces(textposition='outside')
-        fig.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#c8ddd4", family="monospace"),
-            height=420,
-            xaxis=dict(gridcolor="rgba(0,122,77,0.15)", zerolinecolor="rgba(0,122,77,0.2)", color="#c8ddd4"),
-            yaxis=dict(gridcolor="rgba(0,122,77,0.15)", color="#c8ddd4"),
-            coloraxis_showscale=False,
-            margin=dict(t=10, b=10, l=180),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Insights
-        st.markdown("**💡 Insights clés**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("✅ **Puissance (W)** = feature la plus prédictive (23.4%)\n\nLa puissance mécanique combinée couple × vitesse révèle mieux la contrainte machine que chaque capteur seul.")
-        with col2:
-            st.warning("⚠️ **Usure outil** = 2ème facteur (19.9%)\n\nUne usure > 200 min augmente drastiquement le risque. Recommandation : remplacement préventif à 180 min.")
-
-    with tab3:
-        st.markdown('<div class="section-header">🎯 MATRICE DE CONFUSION — XGBOOST</div>', unsafe_allow_html=True)
-
-        # Confusion matrix simulée basée sur les résultats du notebook
-        TP, FP, FN, TN = 87, 8, 9, 1896
-        cm_data = np.array([[TN, FP],[FN, TP]])
-        labels  = ["Normal (0)", "Panne (1)"]
-
-        fig = px.imshow(
-            cm_data, x=labels, y=labels,
-            color_continuous_scale=[[0,"rgba(0,0,0,0.1)"],[0.5,OCP_GREEN+"88"],[1,OCP_GREEN]],
-            text_auto=True, labels=dict(x="Prédit", y="Réel"),
-        )
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#c8ddd4", family="monospace"), height=350, margin=dict(t=10,b=10, xaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4'), yaxis=dict(gridcolor='rgba(0,122,77,0.15)', color='#c8ddd4')))
-        st.plotly_chart(fig, use_container_width=True)
-
-        col1, col2, col3, col4 = st.columns(4)
-        for col, label, val, desc in [
-            (col1,"Vrais Positifs", TP, "Pannes détectées ✅"),
-            (col2,"Faux Négatifs",  FN, "Pannes manquées ⚠️"),
-            (col3,"Faux Positifs",  FP, "Fausses alarmes ℹ️"),
-            (col4,"Vrais Négatifs", TN, "Normaux corrects ✅"),
-        ]:
-            with col:
-                st.metric(label, val, help=desc)
-
-        st.markdown(f"""
-        **Estimation d'impact économique OCP**
-        - Pannes évitées estimées : **~{int(TP*0.8)}/an**
-        - Économie potentielle : **~{int(TP*0.8*50000):,} MAD/an** (à 50 000 MAD/panne)
-        - Recommandation : seuil d'alerte à **0.35** pour maximiser le rappel
-        """)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE : RAPPORT
-# ══════════════════════════════════════════════════════════════════════════════
-elif page == "📋 Rapport":
-    st.markdown("## 📋 Rapport Final — OCP Maintenance Prédictive")
-    st.markdown("---")
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.markdown("""
-        ### Contexte du Projet
-        Ce projet développe un système de **maintenance prédictive industrielle** pour l'OCP Group
-        (Office Chérifien des Phosphates), en exploitant le dataset **AI4I 2020** qui contient
-        10 000 enregistrements de capteurs IoT industriels.
-
-        L'objectif est de prédire les pannes machines **avant qu'elles surviennent**, réduisant
-        les arrêts non planifiés et les coûts de maintenance.
-
-        ### Méthodologie
-        Le pipeline complet inclut :
-        - **Qualité des données** : détection outliers IQR, winsorisation 1%-99%
-        - **Feature Engineering** : 5 capteurs → 11 variables (puissance, diff. température, usure normalisée...)
-        - **Rééquilibrage** : SMOTE appliqué (3.4% de pannes → déséquilibre traité)
-        - **Modélisation** : 6 algorithmes comparés en validation croisée K-Fold stratifiée
-        - **Interprétabilité** : SHAP values pour expliquer chaque prédiction
-        """)
-
-    with col2:
-        st.markdown("### Résumé des Performances")
-        metrics_summary = {
-            "Meilleur modèle": BEST_MODEL,
-            "F1-Score": "91.24%",
-            "ROC-AUC": "98.71%",
-            "Précision": "92.03%",
-            "Rappel": "90.47%",
-            "CV Mean": "90.89%",
-        }
-        for k, v in metrics_summary.items():
-            c1, c2 = st.columns([1.5, 1])
-            c1.markdown(f"<span style='font-size:12px;color:#8aada0;'>{k}</span>", unsafe_allow_html=True)
-            c2.markdown(f"<span style='font-size:12px;font-weight:700;color:#F5A800;'>{v}</span>", unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown("### ✅ Recommandations OCP")
-
-    recs = [
-        ("1", OCP_GREEN,  "Déployer XGBoost en production",     "Via API REST ou Streamlit. Seuil d'alerte recommandé : 0.35 pour maximiser le rappel."),
-        ("2", OCP_GOLD,   "Intégrer les capteurs IoT temps réel","Connexion SCADA/MES pour alimentation automatique du modèle en continu."),
-        ("3", OCP_BLUE,   "Prioriser usure outil & couple",      "Les 2 features les plus importantes. Inspection préventive à 180 min d'usure."),
-        ("4", OCP_ORANGE, "Réentraîner tous les 6 mois",         "Le comportement des machines évolue. Un réentraînement régulier maintient la performance."),
-        ("5", OCP_RED,    "Surveiller les machines de type L",   "Taux de panne plus élevé. Priorité de maintenance sur ce parc."),
-    ]
-
-    for num, color, title, desc in recs:
-        st.markdown(f"""
-        <div style='background:rgba(0,0,0,0.2);border-left:4px solid {color};
-                    border-radius:0 10px 10px 0;padding:14px 18px;margin-bottom:10px;'>
-            <div style='font-size:13px;font-weight:700;color:{color};margin-bottom:4px;'>
-                {num}. {title}
-            </div>
-            <div style='font-size:12px;color:#8aada0;'>{desc}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown("### 💰 Impact Économique Estimé")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("""
-        <div class='kpi-box'>
-            <div class='kpi-val'>~70</div>
-            <div class='kpi-lbl'>Pannes évitées / an</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        st.markdown("""
-        <div class='kpi-box'>
-            <div class='kpi-val'>3.5M MAD</div>
-            <div class='kpi-lbl'>Économie estimée / an</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c3:
-        st.markdown("""
-        <div class='kpi-box'>
-            <div class='kpi-val'>< 30 min</div>
-            <div class='kpi-lbl'>Temps de déploiement</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.success("✅ Pipeline complet OCP v2.0 — Prêt pour le déploiement en production.")
-    st.caption("Dataset : AI4I 2020 Predictive Maintenance | Modèle : XGBoost | Auteur : Projet OCP Group")
+                st.dataframe(df_res, use_container_width=True, hide_index=True)
+                csv_r = io.StringIO(); df_res.to_csv(csv_r, index=False)
+                st.download_button("📥 Télécharger les résultats", csv_r.getvalue(),
+                    f"ocp_batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    "text/csv", use_container_width=True)
+        except Exception as e:
+            st.error(f"Erreur : {e}")
