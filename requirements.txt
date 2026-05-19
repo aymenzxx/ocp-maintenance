@@ -1,6 +1,8 @@
-streamlit>=1.35.0
+streamlit
 numpy
 pandas
-scikit-learn==1.6.1
+scikit-learn
 lightgbm
 joblib
+shap
+matplotlib
