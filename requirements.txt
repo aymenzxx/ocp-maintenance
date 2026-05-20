@@ -1,9 +1,6 @@
-streamlit
-numpy
-pandas
-scikit-learn
-lightgbm
-joblib
-shap
-matplotlib
-reportlab
+streamlit>=1.32.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.18.0
+scikit-learn==1.6.1
+imbalanced-learn>=0.11.0

@@ -1,109 +1,56 @@
-# 🏭 OCP — Maintenance Prédictive Industrielle
+# 🏭 OCP — Maintenance Prédictive · Streamlit App
 
-Application Streamlit complète pour la prédiction de pannes des équipements industriels OCP Group.
+Application de déploiement du modèle de maintenance prédictive OCP.
 
----
-
-## 📦 Structure du projet
+## Structure
 
 ```
-ocp_app/
-├── app.py              ← Application principale Streamlit
-├── requirements.txt    ← Dépendances Python
-├── .streamlit/
-│   └── config.toml     ← Configuration thème sombre OCP
+ocp_streamlit/
+├── app.py                              ← Application principale
+├── requirements.txt                    ← Dépendances Python
+├── predictive_maintenance_pipeline.pkl ← Modèle (à copier ici)
+├── model_metadata.json                 ← Métadonnées (à copier ici)
 └── README.md
 ```
 
----
-
-## 🚀 Déploiement en 4 étapes
-
-### Étape 1 — Préparer GitHub
+## Lancement local
 
 ```bash
-git init
-git add .
-git commit -m "OCP Maintenance Prédictive v2.0"
-```
+# 1. Copier les fichiers modèle
+cp /chemin/vers/predictive_maintenance_pipeline.pkl .
+cp /chemin/vers/model_metadata.json .
 
-Créez un repo sur [github.com](https://github.com/new) puis :
+# 2. Créer un environnement virtuel
+python -m venv venv
+source venv/bin/activate        # Linux/Mac
+# venv\Scripts\activate         # Windows
 
-```bash
-git remote add origin https://github.com/VOTRE_USERNAME/ocp-maintenance.git
-git push -u origin main
-```
-
-### Étape 2 — Déployer sur Streamlit Cloud
-
-1. Allez sur **[share.streamlit.io](https://share.streamlit.io)**
-2. Connectez votre compte GitHub
-3. Cliquez **"New app"**
-4. Sélectionnez votre repo `ocp-maintenance`
-5. Fichier principal : `app.py`
-6. Cliquez **"Deploy!"**
-
-> ✅ Votre app sera live en ~2 minutes à l'adresse :
-> `https://VOTRE_USERNAME-ocp-maintenance-app-XXXXX.streamlit.app`
-
-### Étape 3 — Test en local (optionnel)
-
-```bash
+# 3. Installer les dépendances
 pip install -r requirements.txt
+
+# 4. Lancer l'app
 streamlit run app.py
 ```
 
-L'app s'ouvre sur `http://localhost:8501`
+L'app sera disponible sur http://localhost:8501
 
-### Étape 4 — Ajouter vos modèles .pkl (optionnel)
+## Déploiement sur Streamlit Cloud
 
-Si vous voulez utiliser les vrais modèles entraînés de votre notebook :
+1. Créez un repo GitHub avec les fichiers ci-dessus
+2. Allez sur https://share.streamlit.io
+3. Connectez votre repo → sélectionnez `app.py`
+4. ⚠️ Le fichier `.pkl` doit être commité dans le repo (< 100 MB)
 
-```bash
-# Copiez vos fichiers dans le dossier
-cp ocp_best_model.pkl  ocp_app/
-cp ocp_scaler.pkl      ocp_app/
-cp ocp_label_encoder.pkl ocp_app/
-```
+## ⚠️ Note sur le modèle pickle
 
-Puis dans `app.py`, remplacez la fonction `predict_failure()` par :
+Le modèle a été entraîné avec **scikit-learn 1.6.1**.  
+Le `requirements.txt` épingle cette version pour éviter les incompatibilités.
 
-```python
-import joblib
+Si vous re-générez le modèle avec une version plus récente, mettez à jour `requirements.txt`.
 
-@st.cache_resource
-def load_model():
-    model  = joblib.load("ocp_best_model.pkl")
-    scaler = joblib.load("ocp_scaler.pkl")
-    le     = joblib.load("ocp_label_encoder.pkl")
-    return model, scaler, le
-```
+## Fonctionnalités
 
----
-
-## 🖥️ Fonctionnalités
-
-| Page | Contenu |
-|------|---------|
-| 🏠 Accueil | KPIs, pipeline, types de pannes |
-| 📊 Dashboard | EDA interactive (distributions, corrélations, boxplots) |
-| 🤖 Simulateur | Prédiction temps réel avec gauge d'alerte |
-| 📈 Modèles | Comparaison 6 algo, SHAP, matrice de confusion |
-| 📋 Rapport | Recommandations & impact économique OCP |
-
----
-
-## ⚙️ Configuration
-
-Le fichier `.streamlit/config.toml` configure le thème sombre OCP automatiquement.
-
----
-
-## 📊 Dataset
-
-**AI4I 2020 Predictive Maintenance Dataset**  
-10 000 enregistrements | 5 capteurs IoT | 6 types de pannes
-
----
-
-*Projet OCP Group — Maintenance Prédictive Industrielle v2.0*
+- **Prédiction individuelle** : saisie manuelle des capteurs + gauge de risque
+- **Analyse par lot** : simulation d'un parc de machines avec dashboard
+- **Export CSV** des résultats de lot
+- **Mode dégradé** : si le fichier `.pkl` est absent, une estimation heuristique est utilisée

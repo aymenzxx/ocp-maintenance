@@ -1,0 +1,11 @@
+{
+  "model_name": "R\u00e9gression Logistique",
+  "roc_auc_test": 0.9837,
+  "avg_prec_test": 0.7591,
+  "f1_test": 0.632,
+  "optimal_threshold": 0.8817,
+  "n_features": 28,
+  "train_samples": 276101,
+  "training_date": "2040",
+  "target": "Failure_Within_7_Days"
+}
