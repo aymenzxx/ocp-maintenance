@@ -93,15 +93,38 @@ MACHINE_TYPE_MAP = {
     "Hydraulic_Press": 6, "Mill": 7, "Pump": 8, "Reactor": 9,
 }
 
+def _heuristic(temp, vibration, oil, errors_30d, last_maint, fail_count) -> float:
+    """Score de risque heuristique quand le modèle pkl est indisponible."""
+    score = 0.0
+    # Température (seuil critique 80°C)
+    score += np.clip((temp - 40) / 60, 0, 1) * 0.25
+    # Vibration (seuil critique 15 mm/s)
+    score += np.clip(vibration / 30, 0, 1) * 0.20
+    # Huile (faible niveau → risque élevé)
+    score += np.clip((100 - oil) / 90, 0, 1) * 0.15
+    # Codes erreur
+    score += np.clip(errors_30d / 15, 0, 1) * 0.20
+    # Retard maintenance
+    score += np.clip(last_maint / 400, 0, 1) * 0.12
+    # Historique pannes
+    score += np.clip(fail_count / 8, 0, 1) * 0.08
+    return float(np.clip(score, 0.02, 0.97))
+
 # ── Load model
 @st.cache_resource
 def load_model():
     pkl_path = Path("predictive_maintenance_pipeline.pkl")
     if not pkl_path.exists():
-        return None, None
-    with open(pkl_path, "rb") as f:
-        artifacts = pickle.load(f)
-    return artifacts, None
+        return None, "Fichier .pkl introuvable"
+    try:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with open(pkl_path, "rb") as f:
+                artifacts = pickle.load(f)
+        return artifacts, None
+    except Exception as e:
+        return None, str(e)
 
 @st.cache_data
 def load_metadata():
@@ -245,8 +268,7 @@ with st.sidebar:
     page = st.radio("Navigation", ["🔬 Prédiction Individuelle", "📋 Analyse par Lot", "ℹ️ À propos"])
 
 if artifacts is None:
-    st.error("⚠️  Fichier `predictive_maintenance_pipeline.pkl` introuvable dans le répertoire de l'app. Placez-le à côté de `app.py`.")
-    st.info("Le modèle doit être chargé pour effectuer des prédictions. Les autres onglets restent accessibles.")
+    st.warning(f"⚠️ Modèle non chargé : {err}. L'app fonctionne en mode estimation heuristique.")
     model = None
     preprocessor = None
 else:
@@ -319,15 +341,10 @@ if page == "🔬 Prédiction Individuelle":
                 X_prep = preprocessor.transform(X_new)
                 proba  = model.predict_proba(X_prep)[0, 1]
             except Exception as e:
-                st.warning(f"Erreur préprocesseur : {e}. Prédiction demo.")
-                proba = float(np.clip(
-                    0.1 + (temp - 50) / 200 + vibration / 60 + (100 - oil) / 300
-                    + errors_30d / 60 + last_maint / 1000, 0.05, 0.98))
+                st.warning(f"Erreur préprocesseur : {e}. Mode estimation.")
+                proba = _heuristic(temp, vibration, oil, errors_30d, last_maint, fail_count)
         else:
-            # Demo mode
-            proba = float(np.clip(
-                0.1 + (temp - 50) / 200 + vibration / 60 + (100 - oil) / 300
-                + errors_30d / 60 + last_maint / 1000, 0.05, 0.98))
+            proba = _heuristic(temp, vibration, oil, errors_30d, last_maint, fail_count)
 
         level, color, css_class, action = classify_risk(proba, threshold)
 
@@ -400,15 +417,13 @@ elif page == "📋 Analyse par Lot":
                     X_prep = preprocessor.transform(X_new)
                     proba  = model.predict_proba(X_prep)[0, 1]
                 except:
-                    proba = float(np.clip(
-                        0.1 + (d["Temperature_C"] - 50)/200 + d["Vibration_mms"]/60
-                        + (100 - d["Oil_Level_pct"])/300 + d["Error_Codes_Last_30_Days"]/60
-                        + d["Last_Maintenance_Days_Ago"]/1000, 0.05, 0.98))
+                    proba = _heuristic(d["Temperature_C"], d["Vibration_mms"],
+                                       d["Oil_Level_pct"], d["Error_Codes_Last_30_Days"],
+                                       d["Last_Maintenance_Days_Ago"], d["Failure_History_Count"])
             else:
-                proba = float(np.clip(
-                    0.1 + (d["Temperature_C"] - 50)/200 + d["Vibration_mms"]/60
-                    + (100 - d["Oil_Level_pct"])/300 + d["Error_Codes_Last_30_Days"]/60
-                    + d["Last_Maintenance_Days_Ago"]/1000, 0.05, 0.98))
+                proba = _heuristic(d["Temperature_C"], d["Vibration_mms"],
+                                   d["Oil_Level_pct"], d["Error_Codes_Last_30_Days"],
+                                   d["Last_Maintenance_Days_Ago"], d["Failure_History_Count"])
 
             level, color, _, action = classify_risk(proba, threshold)
             results.append({
@@ -435,10 +450,7 @@ elif page == "📋 Analyse par Lot":
         st.plotly_chart(make_batch_chart(res_df, threshold), use_container_width=True)
 
         st.markdown("**📄 Tableau complet**")
-        st.dataframe(
-            res_df.style.background_gradient(subset=["risk_score"], cmap="RdYlGn_r"),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(res_df, use_container_width=True, hide_index=True)
 
         csv = res_df.to_csv(index=False).encode()
         st.download_button("⬇️ Télécharger CSV", csv, "ocp_risk_report.csv", "text/csv")
