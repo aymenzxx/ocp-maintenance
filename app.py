@@ -283,9 +283,9 @@ with tab2:
         # Color-coded table
         def color_row(row):
             s = row["Score (%)"]
-            if s >= 80:   bg = "#FFEBEE"
-            elif s >= 55: bg = "#FFF3E0"
-            elif s >= THRESHOLD * 100: bg = "#FFFDE7"
+            if s >= 80:   bg = "#D65468"
+            elif s >= 55: bg = "#92827E"
+            elif s >= THRESHOLD * 100: bg = "#DFD676"
             else:         bg = "#E8F5E9"
             return [f"background-color: {bg}"] * len(row)
 
