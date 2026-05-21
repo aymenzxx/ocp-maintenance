@@ -2,6 +2,11 @@ import streamlit as st
 import pickle
 import numpy as np
 import pandas as pd
+import base64
+from pathlib import Path
+
+# ── Resolve base directory (works locally and on Streamlit Cloud)
+BASE_DIR = Path(__file__).parent
 
 # ── Page config
 st.set_page_config(
@@ -70,15 +75,20 @@ st.markdown(f"""
 # ── Load model
 @st.cache_resource
 def load_model():
-    with open("predictive_maintenance_pipeline.pkl", "rb") as f:
+    model_path = BASE_DIR / "predictive_maintenance_pipeline.pkl"
+    with open(model_path, "rb") as f:
         return pickle.load(f)
 
-artifacts    = load_model()
-model        = artifacts["model"]
-preprocessor = artifacts["preprocessor"]
-FEATURE_COLS = artifacts["feature_cols"]
-THRESHOLD    = artifacts["threshold"]
-le           = artifacts["label_encoder"]
+try:
+    artifacts    = load_model()
+    model        = artifacts["model"]
+    preprocessor = artifacts["preprocessor"]
+    FEATURE_COLS = artifacts["feature_cols"]
+    THRESHOLD    = artifacts["threshold"]
+    le           = artifacts["label_encoder"]
+except Exception as e:
+    st.error(f"❌ Erreur chargement modèle : {e}\n\nVérifiez que `predictive_maintenance_pipeline.pkl` est bien dans le dépôt.")
+    st.stop()
 
 MACHINE_TYPES = ['Conveyor_Belt', 'CNC_Lathe', 'Hydraulic_Press',
                  'Crusher', 'Flotation_Cell', 'Dryer', 'Mixer', 'Pump']
@@ -96,7 +106,7 @@ def engineer_features(d: dict) -> pd.DataFrame:
     row["High_Vibration_Flag"]  = (row["Vibration_mms"] > 15).astype(int)
     row["Overheat_Flag"]        = (row["Temperature_C"] > 80).astype(int)
     row["Late_Maintenance_Flag"]= (row["Last_Maintenance_Days_Ago"] > 180).astype(int)
-    row["Machine_Type_Enc"]     = 0   # default; ignored for LR
+    row["Machine_Type_Enc"]     = 0
     row["AI_Supervision_Int"]   = int(d.get("AI_Supervision", False))
     return row[FEATURE_COLS].reindex(columns=FEATURE_COLS, fill_value=0)
 
@@ -114,17 +124,17 @@ def predict(d: dict):
         level = "🟢 FAIBLE";   css = "faible";   action = "Fonctionnement normal — maintenance planifiée"
     return proba, level, css, action
 
-# ── Load OCP logo as base64
-import base64
-with open("1779325801947_image.png.png", "rb") as _f:
-    _logo_b64 = base64.b64encode(_f.read()).decode()
+# ── Load OCP logo (inline base64, fallback to emoji)
+_logo_html = ""
+_logo_path = BASE_DIR / "ocp_logo.png"
+if _logo_path.exists():
+    _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
+    _logo_html = f'<div class="main-header-logo"><img src="data:image/png;base64,{_logo_b64}" alt="OCP"/></div>'
 
 # ── Header
 st.markdown(f"""
 <div class="main-header">
-  <div class="main-header-logo">
-    <img src="data:image/png;base64,{_logo_b64}" alt="OCP Logo"/>
-  </div>
+  {_logo_html}
   <div class="main-header-text">
     <h1>OCP — Système de Maintenance Prédictive</h1>
     <p>Prédiction de pannes machines dans les 7 prochains jours · Groupe OCP</p>
@@ -195,16 +205,13 @@ with tab1:
 
         st.markdown(f"""
         <svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:280px;display:block;margin:0 auto">
-          <!-- arcs -->
           <path d="M 25 130 A 75 75 0 0 1 62 57" fill="none" stroke="#1B5E20" stroke-width="16" stroke-linecap="round"/>
           <path d="M 62 57  A 75 75 0 0 1 100 25" fill="none" stroke="#FBC02D" stroke-width="16" stroke-linecap="round"/>
           <path d="M 100 25 A 75 75 0 0 1 138 57" fill="none" stroke="#FF6600" stroke-width="16" stroke-linecap="round"/>
           <path d="M 138 57 A 75 75 0 0 1 175 130" fill="none" stroke="#D32F2F" stroke-width="16" stroke-linecap="round"/>
-          <!-- needle -->
           <line x1="100" y1="130" x2="{needle_x:.1f}" y2="{needle_y:.1f}"
                 stroke="#333" stroke-width="3" stroke-linecap="round"/>
           <circle cx="100" cy="130" r="6" fill="#333"/>
-          <!-- score -->
           <text x="100" y="118" text-anchor="middle" font-size="22" font-weight="bold" fill="#1a1a1a">{pct:.1f}%</text>
           <text x="100" y="138" text-anchor="middle" font-size="9" fill="#666">Score de Risque</text>
         </svg>
@@ -219,7 +226,6 @@ with tab1:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Key indicators
         km1, km2 = st.columns(2)
         age = 2040 - install_year
         km1.metric("🌡️ Température", f"{temp}°C",  delta=f"+{temp-75:.0f}°C vs normal" if temp > 75 else None)
@@ -227,7 +233,6 @@ with tab1:
         km1.metric("🔧 Âge Machine", f"{age} ans")
         km2.metric("📅 Dernière maint.", f"{last_maint}j", delta="Retard" if last_maint > 180 else None, delta_color="inverse")
 
-        # Feature flags
         st.markdown('<div class="section-title" style="margin-top:1rem">⚠️ Indicateurs d\'Alerte</div>', unsafe_allow_html=True)
         flags = []
         if temp > 80:       flags.append("🔴 Surchauffe détectée")
@@ -284,7 +289,6 @@ with tab2:
                              "Niveau": level, "Action": action})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
-        # KPI cards
         total     = len(df_res)
         critiques = (df_res["Score (%)"] >= 80).sum()
         eleves    = ((df_res["Score (%)"] >= 55) & (df_res["Score (%)"] < 80)).sum()
@@ -315,7 +319,6 @@ with tab2:
             height=420,
         )
 
-        # Urgent list
         urgents = df_res[df_res["Score (%)"] >= 80]
         if not urgents.empty:
             st.error(f"🚨 {len(urgents)} machine(s) nécessitent une intervention immédiate !")
@@ -328,7 +331,7 @@ with tab2:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#999;font-size:0.8rem'>"
-    "OCP Group — Système de Maintenance Prédictive · Modèle LightGBM · ROC-AUC > 0.95"
+    "OCP Group — Système de Maintenance Prédictive · Modèle scikit-learn · ROC-AUC > 0.95"
     "</div>",
     unsafe_allow_html=True,
 )
