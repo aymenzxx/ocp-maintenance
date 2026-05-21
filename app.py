@@ -4,6 +4,11 @@ import numpy as np
 import pandas as pd
 import base64
 import io
+import smtplib
+import ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from pathlib import Path
 from datetime import datetime
 
@@ -126,6 +131,107 @@ def predict(d: dict):
 # ════════════════════════════════════════════════
 # PDF GENERATION
 # ════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════
+# EMAIL ALERT FUNCTION
+# ═══════════════════════════════════════════════════════
+def send_alert_email(smtp_host: str, smtp_port: int, sender: str,
+                     password: str, recipients: list,
+                     machine_id: str, machine_type: str,
+                     level: str, score_pct: float, action: str,
+                     pdf_bytes: bytes = None, pdf_filename: str = None) -> tuple[bool, str]:
+    """Send alert email via SMTP. Returns (success, message)."""
+    level_colors = {
+        "CRITIQUE": "#D32F2F",
+        "ELEVE":    "#FF6600",
+    }
+    level_labels = {
+        "CRITIQUE": "🔴 CRITIQUE — Intervention Immédiate",
+        "ELEVE":    "🟠 ÉLEVÉ — Planifier Maintenance",
+    }
+    color  = level_colors.get(level, "#006633")
+    label  = level_labels.get(level, level)
+    now_str = datetime.now().strftime("%d/%m/%Y à %H:%M")
+
+    html_body = f"""
+    <html><body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0">
+    <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
+      <!-- Header -->
+      <div style="background:#006633;padding:24px 32px">
+        <h1 style="color:#fff;margin:0;font-size:22px">⚠️ OCP — Alerte Maintenance Prédictive</h1>
+        <p style="color:#a8d5b5;margin:6px 0 0;font-size:13px">Système de détection automatique · {now_str}</p>
+      </div>
+      <!-- Level banner -->
+      <div style="background:{color};padding:16px 32px;text-align:center">
+        <h2 style="color:#fff;margin:0;font-size:20px">{label}</h2>
+        <p style="color:#fff;margin:6px 0 0;font-size:28px;font-weight:bold">{score_pct:.1f}%</p>
+        <p style="color:rgba(255,255,255,0.85);margin:2px 0 0;font-size:12px">Score de risque de panne</p>
+      </div>
+      <!-- Body -->
+      <div style="padding:28px 32px">
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#555;width:40%"><b>🏭 Machine ID</b></td>
+              <td style="padding:10px 0;border-bottom:1px solid #eee;font-weight:bold">{machine_id}</td></tr>
+          <tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#555"><b>⚙️ Type</b></td>
+              <td style="padding:10px 0;border-bottom:1px solid #eee">{machine_type}</td></tr>
+          <tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#555"><b>📅 Détecté le</b></td>
+              <td style="padding:10px 0;border-bottom:1px solid #eee">{now_str}</td></tr>
+        </table>
+        <!-- Action box -->
+        <div style="background:#fff8e1;border-left:4px solid {color};padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0">
+          <p style="margin:0 0 4px;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Action Recommandée</p>
+          <p style="margin:0;font-size:15px;font-weight:bold;color:#333">{action}</p>
+        </div>
+        {'<p style="font-size:13px;color:#555">📎 Le rapport PDF détaillé est joint à cet email.</p>' if pdf_bytes else ''}
+        <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+        <p style="font-size:12px;color:#999;margin:0">
+          OCP Group — Système de Maintenance Prédictive<br>
+          Ce message est généré automatiquement. Ne pas répondre.
+        </p>
+      </div>
+    </div>
+    </body></html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[OCP ALERTE {level}] Machine {machine_id} — Score {score_pct:.1f}%"
+    msg["From"]    = sender
+    msg["To"]      = ", ".join(recipients)
+
+    msg.attach(MIMEText(
+        (f"ALERTE {level} - Machine {machine_id} ({machine_type})\n"
+         f"Score de risque : {score_pct:.1f}%\n"
+         f"Action : {action}\n"
+         f"Detecte le {now_str}"),
+        "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    if pdf_bytes and pdf_filename:
+        att = MIMEApplication(pdf_bytes, Name=pdf_filename)
+        att["Content-Disposition"] = f'attachment; filename="{pdf_filename}"'
+        msg.attach(att)
+
+    try:
+        context = ssl.create_default_context()
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+                server.login(sender, password)
+                server.sendmail(sender, recipients, msg.as_string())
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.login(sender, password)
+                server.sendmail(sender, recipients, msg.as_string())
+        return True, "Email envoyé avec succès ✅"
+    except smtplib.SMTPAuthenticationError:
+        return False, "❌ Erreur authentification — vérifiez email/mot de passe (Gmail: utilisez un mot de passe d'application)"
+    except smtplib.SMTPConnectError:
+        return False, f"❌ Impossible de se connecter à {smtp_host}:{smtp_port}"
+    except Exception as e:
+        return False, f"❌ Erreur : {str(e)}"
+
+
 def generate_pdf_single(data: dict, proba: float, level: str, action: str, flags: list) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -382,14 +488,9 @@ def generate_pdf_fleet(df_res: pd.DataFrame, n_total: int,
     header = [["Machine ID", "Type", "Score (%)", "Niveau", "Action Recommandee"]]
     rows = []
     for _, r in df_res.iterrows():
-        if "_level" in r.index and pd.notna(r["_level"]):
-            niveau_clean = str(r["_level"])
-        elif "Niveau" in r.index:
-            niveau_clean = str(r["Niveau"]).replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ","")
-        else:
-            niveau_clean = "—"
-        rows.append([str(r["Machine_ID"]), str(r["Type"]),
-                     f"{float(r['Score (%)']):.1f}%", niveau_clean, str(r["Action"])])
+        niveau_clean = r["Niveau"].replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ","")
+        rows.append([r["Machine_ID"], r["Type"],
+                     f"{r['Score (%)']:.1f}%", niveau_clean, r["Action"]])
 
     table_data = header + rows
     col_w = ["20%","18%","14%","14%","34%"]
@@ -446,6 +547,78 @@ st.markdown(f"""
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════
+# SIDEBAR — Configuration Email
+# ═══════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("## 📧 Alertes Email")
+    st.markdown("---")
+
+    email_enabled = st.toggle("Activer les alertes email", value=False)
+
+    if email_enabled:
+        smtp_provider = st.selectbox(
+            "Fournisseur",
+            ["Gmail", "Outlook / Hotmail", "Yahoo Mail", "Personnalisé"],
+        )
+        provider_presets = {
+            "Gmail":              ("smtp.gmail.com", 587),
+            "Outlook / Hotmail":  ("smtp.office365.com", 587),
+            "Yahoo Mail":         ("smtp.mail.yahoo.com", 587),
+            "Personnalisé":       ("", 587),
+        }
+        default_host, default_port = provider_presets[smtp_provider]
+
+        if smtp_provider == "Personnalisé":
+            smtp_host = st.text_input("Serveur SMTP", placeholder="smtp.example.com")
+            smtp_port = st.number_input("Port", value=587, min_value=1, max_value=65535)
+        else:
+            smtp_host = default_host
+            smtp_port = default_port
+            st.caption(f"Serveur : ")
+
+        sender_email = st.text_input("Email expéditeur", placeholder="votre@email.com")
+        sender_pass  = st.text_input("Mot de passe", type="password",
+                                      placeholder="Gmail: mot de passe d'application")
+        recipients_raw = st.text_area(
+            "Destinataires (un par ligne)",
+            placeholder="responsable@ocp.ma\nmaintenance@ocp.ma",
+            height=90,
+        )
+        recipients = [r.strip() for r in recipients_raw.splitlines() if r.strip()]
+
+        attach_pdf = st.checkbox("Joindre le rapport PDF", value=True)
+
+        if smtp_provider == "Gmail":
+            st.info("💡 Gmail nécessite un **mot de passe d'application** (pas votre mot de passe habituel). [Créer ici](https://myaccount.google.com/apppasswords)", icon="ℹ️")
+
+        st.markdown("**Niveaux déclencheurs :** 🔴 CRITIQUE · 🟠 ÉLEVÉ")
+        st.markdown("---")
+        
+        # Test connection button
+        if st.button("🔌 Tester la connexion", use_container_width=True):
+            if not sender_email or not sender_pass or not smtp_host:
+                st.error("Remplissez tous les champs.")
+            elif not recipients:
+                st.error("Ajoutez au moins un destinataire.")
+            else:
+                with st.spinner("Test en cours..."):
+                    ok, msg = send_alert_email(
+                        smtp_host, int(smtp_port), sender_email, sender_pass,
+                        recipients[:1],
+                        "MC_OCP_TEST", "Test", "CRITIQUE", 92.5,
+                        "Ceci est un email de test — connexion réussie.",
+                        None, None,
+                    )
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+    else:
+        st.caption("Activez le toggle pour configurer les alertes email SMTP.")
+        smtp_host = smtp_port = sender_email = sender_pass = recipients = attach_pdf = None
 
 tab1, tab2 = st.tabs(["🔍 Analyse Machine", "📊 Simulation Flotte"])
 
@@ -504,6 +677,23 @@ with tab1:
         proba, level, css, action = predict(machine_data)
         pct = proba * 100
 
+        # ── Alerte email automatique Tab1
+        if email_enabled and level in ("CRITIQUE", "ELEVE") and sender_email and sender_pass and recipients:
+            _alert_key = f"alert_sent_{machine_id}_{level}"
+            if _alert_key not in st.session_state:
+                _pdf_key2 = f"single_pdf_{machine_id}_{level}"
+                _pdf_data  = st.session_state.get(_pdf_key2) if attach_pdf else None
+                _pdf_fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_data else None
+                ok2, msg2 = send_alert_email(
+                    smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
+                    machine_id, machine_type, level, pct, action, _pdf_data, _pdf_fname)
+                st.session_state[_alert_key] = (ok2, msg2)
+            _ok, _msg = st.session_state[f"alert_sent_{machine_id}_{level}"]
+            if _ok:
+                st.sidebar.success(f"✅ Alerte envoyée pour {machine_id}")
+            else:
+                st.sidebar.error(_msg)
+
         angle    = -90 + 180 * proba
         needle_x = 100 + 75 * np.cos(np.radians(angle - 90))
         needle_y = 100 - 75 * np.sin(np.radians(angle - 90)) + 30
@@ -550,23 +740,17 @@ with tab1:
         for f in flags:
             st.warning(f)
 
-        # ── PDF machine : cached in session_state pour eviter crash au rerender
+        # ── PDF machine : download direct (pas de double clic)
         st.markdown("---")
-        _pdf_key = f"single_pdf_{machine_id}_{level}"
-        if _pdf_key not in st.session_state:
-            try:
-                st.session_state[_pdf_key] = generate_pdf_single(machine_data, proba, level, action, flags)
-            except Exception as _e:
-                st.error(f"❌ Erreur PDF machine : {_e}")
-        if _pdf_key in st.session_state:
-            st.download_button(
-                label="📄 Télécharger le Rapport PDF",
-                data=st.session_state[_pdf_key],
-                file_name=f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                type="primary",
-            )
+        pdf_bytes = generate_pdf_single(machine_data, proba, level, action, flags)
+        st.download_button(
+            label="📄 Télécharger le Rapport PDF",
+            data=pdf_bytes,
+            file_name=f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary",
+        )
 
 # ═══════════════════════════════
 # TAB 2
@@ -612,6 +796,27 @@ with tab2:
                              "Action": action2,
                              "_level": level2})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
+
+        # ── Alertes email flotte (CRITIQUE + ELEVE)
+        if email_enabled and sender_email and sender_pass and recipients:
+            critiques_df = df_res[df_res["_level"].isin(["CRITIQUE", "ELEVE"])]
+            if not critiques_df.empty:
+                _fleet_alert_key = f"fleet_alert_{n_sim}"
+                if _fleet_alert_key not in st.session_state:
+                    _sent, _errors = 0, []
+                    for _, _row in critiques_df.iterrows():
+                        _ok3, _msg3 = send_alert_email(
+                            smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
+                            _row["Machine_ID"], _row["Type"], _row["_level"],
+                            float(_row["Score (%)"]), _row["Action"], None, None)
+                        if _ok3: _sent += 1
+                        else: _errors.append(_msg3)
+                    st.session_state[_fleet_alert_key] = (_sent, _errors)
+                _sent, _errors = st.session_state[f"fleet_alert_{n_sim}"]
+                if _sent:
+                    st.sidebar.success(f"✅ {_sent} alertes email envoyées")
+                for _err in set(_errors):
+                    st.sidebar.error(_err)
 
         # ── Sauvegarde dans session_state pour survivre aux re-renders
         st.session_state["fleet_df"]       = df_res
@@ -664,25 +869,21 @@ with tab2:
         # Génère (ou régénère) le PDF à chaque fois que df_res change
         if "fleet_pdf" not in st.session_state or st.session_state.get("fleet_pdf_n") != total:
             with st.spinner("Préparation du rapport PDF..."):
-                try:
-                    pdf_fleet = generate_pdf_fleet(
-                        df_res[display_cols + ["_level"]],
-                        total, critiques, eleves, normaux)
-                    st.session_state["fleet_pdf"]       = pdf_fleet
-                    st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                    st.session_state["fleet_pdf_n"]     = total
-                except Exception as _e:
-                    st.error(f"❌ Erreur PDF flotte : {_e}")
+                pdf_fleet = generate_pdf_fleet(
+                    df_res[display_cols + ["_level"]].rename(columns={"_level":"Niveau_raw"}),
+                    total, critiques, eleves, normaux)
+            st.session_state["fleet_pdf"]       = pdf_fleet
+            st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            st.session_state["fleet_pdf_n"]     = total
 
-        if "fleet_pdf" in st.session_state:
-            st.download_button(
-                label="📄 Télécharger le Rapport PDF Flotte",
-                data=st.session_state["fleet_pdf"],
-                file_name=st.session_state["fleet_pdf_fname"],
-                mime="application/pdf",
-                use_container_width=True,
-                type="primary",
-            )
+        st.download_button(
+            label="📄 Télécharger le Rapport PDF Flotte",
+            data=st.session_state["fleet_pdf"],
+            file_name=st.session_state["fleet_pdf_fname"],
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary",
+        )
 
 # ── Footer
 st.markdown("---")
