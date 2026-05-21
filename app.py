@@ -116,7 +116,7 @@ def predict(d: dict):
 
 # ── Load OCP logo as base64
 import base64
-with open("ocp_app\1779325801947_image.png.png", "rb") as _f:
+with open("1779325801947_image.png.png", "rb") as _f:
     _logo_b64 = base64.b64encode(_f.read()).decode()
 
 # ── Header
