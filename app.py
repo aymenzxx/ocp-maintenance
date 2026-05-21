@@ -1,4 +1,5 @@
-import streamlit as stiimport pickle
+import streamlit as st
+import pickle
 import numpy as np
 import pandas as pd
 
@@ -311,25 +312,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True,
 )
- with c2:
-        st.markdown("""
-**28 features** dont :
-- `Thermal_Stress` = Temp × Vibration / 100
-- `Maintenance_Urgency` = Jours / (Nb_maintenances + 1)
-- `Fluid_Degradation` = dégradation huile + coolant
-- `Failure_Density` = pannes / (heures / 1000)
-- Flags : `Overheat`, `High_Vibration`, `Late_Maintenance`
-
-**Sites** : Khouribga · Youssoufia · Gantour · Jorf Lasfar · Safi
-        """)
- with c2:
-        st.markdown("""
-**28 features** dont :
-- `Thermal_Stress` = Temp × Vibration / 100
-- `Maintenance_Urgency` = Jours / (Nb_maintenances + 1)
-- `Fluid_Degradation` = dégradation huile + coolant
-- `Failure_Density` = pannes / (heures / 1000)
-- Flags : `Overheat`, `High_Vibration`, `Late_Maintenance`
-
-**Sites** : Khouribga · Youssoufia · Gantour · Jorf Lasfar · Safi
-        """)
