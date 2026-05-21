@@ -382,7 +382,10 @@ def generate_pdf_fleet(df_res: pd.DataFrame, n_total: int,
     header = [["Machine ID", "Type", "Score (%)", "Niveau", "Action Recommandee"]]
     rows = []
     for _, r in df_res.iterrows():
-        niveau_clean = r["Niveau"].replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ","")
+        # Support both column names for backward compat
+        niveau_raw = r.get("_level", r.get("Niveau_raw", ""))
+        niveau_clean = niveau_raw if niveau_raw else (
+            r["Niveau"].replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ",""))
         rows.append([r["Machine_ID"], r["Type"],
                      f"{r['Score (%)']:.1f}%", niveau_clean, r["Action"]])
 
@@ -653,21 +656,26 @@ with tab2:
         # Génère (ou régénère) le PDF à chaque fois que df_res change
         if "fleet_pdf" not in st.session_state or st.session_state.get("fleet_pdf_n") != total:
             with st.spinner("Préparation du rapport PDF..."):
-                pdf_fleet = generate_pdf_fleet(
-                    df_res[display_cols + ["_level"]].rename(columns={"_level":"Niveau_raw"}),
-                    total, critiques, eleves, normaux)
-            st.session_state["fleet_pdf"]       = pdf_fleet
-            st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            st.session_state["fleet_pdf_n"]     = total
+                try:
+                    pdf_fleet = generate_pdf_fleet(
+                        df_res[display_cols + ["_level"]],
+                        total, critiques, eleves, normaux)
+                    st.session_state["fleet_pdf"]       = pdf_fleet
+                    st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    st.session_state["fleet_pdf_n"]     = total
+                except Exception as e:
+                    st.error(f"❌ Erreur génération PDF : {e}")
+                    st.session_state.pop("fleet_pdf", None)
 
-        st.download_button(
-            label="📄 Télécharger le Rapport PDF Flotte",
-            data=st.session_state["fleet_pdf"],
-            file_name=st.session_state["fleet_pdf_fname"],
-            mime="application/pdf",
-            use_container_width=True,
-            type="primary",
-        )
+        if "fleet_pdf" in st.session_state:
+            st.download_button(
+                label="📄 Télécharger le Rapport PDF Flotte",
+                data=st.session_state["fleet_pdf"],
+                file_name=st.session_state["fleet_pdf_fname"],
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
 
 # ── Footer
 st.markdown("---")
