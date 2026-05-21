@@ -605,12 +605,26 @@ with tab2:
                              "_level": level2})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
-        # ── Sauvegarde dans session_state pour survivre aux re-renders
+        _total     = len(df_res)
+        _critiques = int((df_res["_level"] == "CRITIQUE").sum())
+        _eleves    = int((df_res["_level"] == "ELEVE").sum())
+        _normaux   = int((df_res["_level"] == "FAIBLE").sum())
+        _dcols     = ["Machine_ID","Type","Score (%)","Niveau","Action"]
+
         st.session_state["fleet_df"]       = df_res
-        st.session_state["fleet_total"]    = len(df_res)
-        st.session_state["fleet_critiques"]= int((df_res["_level"] == "CRITIQUE").sum())
-        st.session_state["fleet_eleves"]   = int((df_res["_level"] == "ELEVE").sum())
-        st.session_state["fleet_normaux"]  = int((df_res["_level"] == "FAIBLE").sum())
+        st.session_state["fleet_total"]    = _total
+        st.session_state["fleet_critiques"]= _critiques
+        st.session_state["fleet_eleves"]   = _eleves
+        st.session_state["fleet_normaux"]  = _normaux
+
+        # Génération PDF une seule fois, au moment de la simulation
+        try:
+            _pdf = generate_pdf_fleet(df_res[_dcols + ["_level"]], _total, _critiques, _eleves, _normaux)
+            st.session_state["fleet_pdf"]       = _pdf
+            st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        except Exception as _e:
+            st.session_state.pop("fleet_pdf", None)
+            st.error(f"❌ Erreur génération PDF : {_e}")
 
     # ── Affichage des résultats (persistent via session_state)
     if "fleet_df" in st.session_state:
@@ -651,22 +665,8 @@ with tab2:
         else:
             st.success("✅ Aucune machine en état critique dans cet échantillon.")
 
-        # ── PDF flotte : génération auto + download direct
+        # ── PDF flotte : download direct
         st.markdown("---")
-        # Génère (ou régénère) le PDF à chaque fois que df_res change
-        if "fleet_pdf" not in st.session_state or st.session_state.get("fleet_pdf_n") != total:
-            with st.spinner("Préparation du rapport PDF..."):
-                try:
-                    pdf_fleet = generate_pdf_fleet(
-                        df_res[display_cols + ["_level"]],
-                        total, critiques, eleves, normaux)
-                    st.session_state["fleet_pdf"]       = pdf_fleet
-                    st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-                    st.session_state["fleet_pdf_n"]     = total
-                except Exception as e:
-                    st.error(f"❌ Erreur génération PDF : {e}")
-                    st.session_state.pop("fleet_pdf", None)
-
         if "fleet_pdf" in st.session_state:
             st.download_button(
                 label="📄 Télécharger le Rapport PDF Flotte",
