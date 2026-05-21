@@ -18,13 +18,21 @@ st.markdown(f"""
 <style>
     .main-header {{
         background: linear-gradient(135deg, {OCP_GREEN} 0%, #004d26 100%);
-        padding: 1.5rem 2rem;
+        padding: 1.2rem 2rem;
         border-radius: 12px;
         margin-bottom: 1.5rem;
         color: white;
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
     }}
-    .main-header h1 {{ margin: 0; font-size: 1.8rem; }}
-    .main-header p  {{ margin: 0.3rem 0 0; opacity: 0.85; font-size: 0.95rem; }}
+    .main-header-logo {{
+        width: 72px; height: 72px; flex-shrink: 0;
+        background: white; border-radius: 50%; padding: 6px;
+    }}
+    .main-header-logo img {{ width: 100%; height: 100%; object-fit: contain; }}
+    .main-header-text h1 {{ margin: 0; font-size: 1.7rem; }}
+    .main-header-text p  {{ margin: 0.3rem 0 0; opacity: 0.85; font-size: 0.9rem; }}
 
     .metric-card {{
         background: white;
@@ -106,11 +114,21 @@ def predict(d: dict):
         level = "🟢 FAIBLE";   css = "faible";   action = "Fonctionnement normal — maintenance planifiée"
     return proba, level, css, action
 
+# ── Load OCP logo as base64
+import base64
+with open("C:\Users\Pc\Downloads\PROJET_STAGE_TECHNIQUE\ocp_streamlit_app\ocp_app\1779325801947_image.png.png", "rb") as _f:
+    _logo_b64 = base64.b64encode(_f.read()).decode()
+
 # ── Header
-st.markdown("""
+st.markdown(f"""
 <div class="main-header">
-  <h1>🏭 OCP — Système de Maintenance Prédictive</h1>
-  <p>Prédiction de pannes machines dans les 7 prochains jours · Groupe OCP</p>
+  <div class="main-header-logo">
+    <img src="data:image/png;base64,{_logo_b64}" alt="OCP Logo"/>
+  </div>
+  <div class="main-header-text">
+    <h1>OCP — Système de Maintenance Prédictive</h1>
+    <p>Prédiction de pannes machines dans les 7 prochains jours · Groupe OCP</p>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -280,17 +298,19 @@ with tab2:
 
         st.markdown("---")
 
-        # Color-coded table
+        # Color-coded table — explicit dark text to prevent disappearing text
         def color_row(row):
             s = row["Score (%)"]
-            if s >= 80:   bg = "#FFEBEE"
-            elif s >= 55: bg = "#FFF3E0"
-            elif s >= THRESHOLD * 100: bg = "#FFFDE7"
-            else:         bg = "#E8F5E9"
-            return [f"background-color: {bg}"] * len(row)
+            if s >= 80:   bg, fg = "#FFCDD2", "#7f0000"
+            elif s >= 55: bg, fg = "#FFE0B2", "#bf360c"
+            elif s >= THRESHOLD * 100: bg, fg = "#FFF9C4", "#827717"
+            else:         bg, fg = "#C8E6C9", "#1b5e20"
+            style = f"background-color: {bg}; color: {fg}; font-weight: 600;"
+            return [style] * len(row)
 
         st.dataframe(
-            df_res.style.apply(color_row, axis=1),
+            df_res.style.apply(color_row, axis=1)
+                        .set_properties(**{"color": "#111111"}),
             use_container_width=True,
             height=420,
         )
