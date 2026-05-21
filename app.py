@@ -32,10 +32,21 @@ st.markdown(f"""
         gap: 1.5rem;
     }}
     .main-header-logo {{
-        width: 72px; height: 72px; flex-shrink: 0;
-        background: white; border-radius: 50%; padding: 6px;
+        width: 80px; height: 80px; flex-shrink: 0;
+        border-radius: 50%;
+        overflow: hidden;
+        background: white;
+        padding: 8px;
+        box-sizing: border-box;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.4);
+        display: flex; align-items: center; justify-content: center;
     }}
-    .main-header-logo img {{ width: 100%; height: 100%; object-fit: contain; }}
+    .main-header-logo img {{
+        width: 100%; height: 100%;
+        object-fit: contain;
+        border-radius: 50%;
+        display: block;
+    }}
     .main-header-text h1 {{ margin: 0; font-size: 1.7rem; }}
     .main-header-text p  {{ margin: 0.3rem 0 0; opacity: 0.85; font-size: 0.9rem; }}
 
