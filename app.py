@@ -97,7 +97,7 @@ def predict(d: dict):
     proba  = model.predict_proba(X_prep)[0, 1]
     if proba >= 0.80:
         level = "🔴 CRITIQUE";  css = "critique"; action = "Arrêt immédiat + Maintenance d'urgence"
-    elif proba >= 0.55:
+     elif proba >= 0.55:
         level = "🟠 ÉLEVÉ";    css = "eleve";    action = "Planifier maintenance sous 48h"
     elif proba >= THRESHOLD:
         level = "🟡 MODÉRÉ";   css = "modere";   action = "Surveillance renforcée + inspection préventive"
@@ -282,11 +282,7 @@ with tab2:
         # Color-coded table
         def color_row(row):
             s = row["Score (%)"]
-            if s >= 80:   bg = "#FFEBEE"
-            elif s >= 55: bg = "#FFF3E0"
-            elif s >= THRESHOLD * 100: bg = "#FFFDE7"
-            else:         bg = "#E8F5E9"
-            return [f"background-color: {bg}"] * len(row)
+            if s >= 80:   bg = ""#FF9393"            elif s >= 55: bg = ""#FFF4B9"            elif s >= THRESHOLD * 100: bg = ""#DFD676"            else:         bg = ""#6DC774"            return [f"background-color: {bg}"] * len(row)
 
         st.dataframe(
             df_res.style.apply(color_row, axis=1),
