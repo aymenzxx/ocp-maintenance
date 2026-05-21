@@ -616,6 +616,22 @@ with tab1:
         proba, level, css, action = predict(machine_data)
         pct = proba * 100
 
+        # ── Sauvegarde historique par machine (max 10 entrées)
+        _hist_key = f"history_{machine_id}"
+        if _hist_key not in st.session_state:
+            st.session_state[_hist_key] = []
+        _hist = st.session_state[_hist_key]
+        # Ajouter seulement si la valeur a changé ou si c'est la première entrée
+        if not _hist or abs(_hist[-1]["score"] - pct) > 0.01:
+            _hist.append({
+                "score": round(pct, 1),
+                "level": level,
+                "heure": datetime.now().strftime("%H:%M:%S"),
+            })
+            if len(_hist) > 10:
+                _hist.pop(0)
+            st.session_state[_hist_key] = _hist
+
         # ── Bouton d'alerte email manuel (Tab1) — générer PDF puis envoyer
         if email_enabled and level in ("CRITIQUE", "ELEVE") and resend_api_key and recipients:
             st.markdown("---")
@@ -697,6 +713,49 @@ with tab1:
             use_container_width=True,
             type="primary",
         )
+
+        # ── Graphique de tendance (10 dernières analyses)
+        _hist_key = f"history_{machine_id}"
+        _hist = st.session_state.get(_hist_key, [])
+        if len(_hist) >= 2:
+            st.markdown('<div class="section-title" style="margin-top:1rem">📈 Tendance du Score de Risque</div>', unsafe_allow_html=True)
+            import plotly.graph_objects as go
+            _colors = {"CRITIQUE": "#D32F2F", "ELEVE": "#FF6600", "MODERE": "#FBC02D", "FAIBLE": "#2E7D32"}
+            _marker_colors = [_colors.get(h["level"], "#888") for h in _hist]
+            _labels = [h["heure"] for h in _hist]
+            _scores = [h["score"] for h in _hist]
+
+            fig = go.Figure()
+            # Zone de fond par niveau
+            fig.add_hrect(y0=80,  y1=100, fillcolor="#FFEBEE", opacity=0.3, line_width=0, annotation_text="CRITIQUE", annotation_position="right", annotation_font_size=10, annotation_font_color="#D32F2F")
+            fig.add_hrect(y0=55,  y1=80,  fillcolor="#FFF3E0", opacity=0.3, line_width=0, annotation_text="ÉLEVÉ",    annotation_position="right", annotation_font_size=10, annotation_font_color="#FF6600")
+            fig.add_hrect(y0=float(THRESHOLD*100), y1=55, fillcolor="#FFFDE7", opacity=0.3, line_width=0, annotation_text="MODÉRÉ",   annotation_position="right", annotation_font_size=10, annotation_font_color="#FBC02D")
+            fig.add_hrect(y0=0,   y1=float(THRESHOLD*100), fillcolor="#E8F5E9", opacity=0.3, line_width=0, annotation_text="FAIBLE",   annotation_position="right", annotation_font_size=10, annotation_font_color="#2E7D32")
+
+            # Courbe
+            fig.add_trace(go.Scatter(
+                x=_labels, y=_scores,
+                mode="lines+markers",
+                line=dict(color=OCP_GREEN, width=2.5),
+                marker=dict(size=9, color=_marker_colors, line=dict(color="white", width=1.5)),
+                text=[f"{h['level']} · {h['score']:.1f}%" for h in _hist],
+                hoverinfo="text",
+            ))
+
+            fig.update_layout(
+                margin=dict(l=10, r=80, t=10, b=10),
+                height=200,
+                yaxis=dict(range=[0, 100], title="Score (%)", ticksuffix="%", tickfont=dict(size=11), gridcolor="#eeeeee"),
+                xaxis=dict(title="Heure", tickfont=dict(size=10), showgrid=False),
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            if len(_hist) < 2:
+                st.caption("Modifiez les paramètres pour voir la tendance évoluer.")
+        elif len(_hist) == 1:
+            st.caption("📈 Modifiez un paramètre pour voir la courbe de tendance apparaître.")
 
 # ═══════════════════════════════
 # TAB 2
