@@ -166,7 +166,8 @@ with tab1:
 
         machine_id   = st.text_input("ID Machine", "MC_OCP_4521")
         machine_type = st.selectbox("Type de Machine", MACHINE_TYPES, index=1)
-        install_year = st.slider("Année d'installation", 2005, 2038, 2025)
+        machine_age  = st.slider("Âge de la machine (années)", 1, 35, 15)
+        install_year = 2040 - machine_age
         op_hours     = st.number_input("Heures opérationnelles", 0, 200000, 85000, step=500)
 
         st.markdown('<div class="section-title" style="margin-top:1.2rem">🌡️ Capteurs Temps Réel</div>', unsafe_allow_html=True)
@@ -238,7 +239,7 @@ with tab1:
         st.markdown("<br>", unsafe_allow_html=True)
 
         km1, km2 = st.columns(2)
-        age = 2040 - install_year
+        age = machine_age
         km1.metric("🌡️ Température", f"{temp}°C",  delta=f"+{temp-75:.0f}°C vs normal" if temp > 75 else None)
         km2.metric("📳 Vibration",   f"{vibration} mm/s", delta=f"+{vibration-15:.1f}" if vibration > 15 else None)
         km1.metric("🔧 Âge Machine", f"{age} ans")
