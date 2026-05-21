@@ -577,7 +577,7 @@ with st.sidebar:
         else:
             smtp_host = default_host
             smtp_port = default_port
-            st.caption(f"Serveur : ")
+            st.caption(f"Serveur : `{smtp_host}:{smtp_port}`")
 
         sender_email = st.text_input("Email expéditeur", placeholder="votre@email.com")
         sender_pass  = st.text_input("Mot de passe", type="password",
@@ -677,22 +677,21 @@ with tab1:
         proba, level, css, action = predict(machine_data)
         pct = proba * 100
 
-        # ── Alerte email automatique Tab1
+        # ── Bouton d'alerte email manuel (Tab1)
         if email_enabled and level in ("CRITIQUE", "ELEVE") and sender_email and sender_pass and recipients:
-            _alert_key = f"alert_sent_{machine_id}_{level}"
-            if _alert_key not in st.session_state:
+            st.markdown("---")
+            if st.button(f"📧 Envoyer l'alerte email ({level})", type="primary", use_container_width=True):
                 _pdf_key2 = f"single_pdf_{machine_id}_{level}"
                 _pdf_data  = st.session_state.get(_pdf_key2) if attach_pdf else None
                 _pdf_fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_data else None
-                ok2, msg2 = send_alert_email(
-                    smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
-                    machine_id, machine_type, level, pct, action, _pdf_data, _pdf_fname)
-                st.session_state[_alert_key] = (ok2, msg2)
-            _ok, _msg = st.session_state[f"alert_sent_{machine_id}_{level}"]
-            if _ok:
-                st.sidebar.success(f"✅ Alerte envoyée pour {machine_id}")
-            else:
-                st.sidebar.error(_msg)
+                with st.spinner("Envoi en cours..."):
+                    ok2, msg2 = send_alert_email(
+                        smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
+                        machine_id, machine_type, level, pct, action, _pdf_data, _pdf_fname)
+                if ok2:
+                    st.success(f"✅ Alerte envoyée à {len(recipients)} destinataire(s)")
+                else:
+                    st.error(msg2)
 
         angle    = -90 + 180 * proba
         needle_x = 100 + 75 * np.cos(np.radians(angle - 90))
