@@ -545,19 +545,17 @@ with tab1:
         for f in flags:
             st.warning(f)
 
-        # ── Bouton PDF
+        # ── PDF machine : download direct (pas de double clic)
         st.markdown("---")
-        if st.button("📄 Générer le Rapport PDF", type="primary", use_container_width=True):
-            with st.spinner("Génération du rapport..."):
-                pdf_bytes = generate_pdf_single(machine_data, proba, level, action, flags)
-            fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            st.download_button(
-                label="⬇️ Télécharger le rapport PDF",
-                data=pdf_bytes,
-                file_name=fname,
-                mime="application/pdf",
-                use_container_width=True,
-            )
+        pdf_bytes = generate_pdf_single(machine_data, proba, level, action, flags)
+        st.download_button(
+            label="📄 Télécharger le Rapport PDF",
+            data=pdf_bytes,
+            file_name=f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary",
+        )
 
 # ═══════════════════════════════
 # TAB 2
@@ -604,10 +602,20 @@ with tab2:
                              "_level": level2})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
-        total     = len(df_res)
-        critiques = (df_res["_level"] == "CRITIQUE").sum()
-        eleves    = (df_res["_level"] == "ELEVE").sum()
-        normaux   = (df_res["_level"] == "FAIBLE").sum()
+        # ── Sauvegarde dans session_state pour survivre aux re-renders
+        st.session_state["fleet_df"]       = df_res
+        st.session_state["fleet_total"]    = len(df_res)
+        st.session_state["fleet_critiques"]= int((df_res["_level"] == "CRITIQUE").sum())
+        st.session_state["fleet_eleves"]   = int((df_res["_level"] == "ELEVE").sum())
+        st.session_state["fleet_normaux"]  = int((df_res["_level"] == "FAIBLE").sum())
+
+    # ── Affichage des résultats (persistent via session_state)
+    if "fleet_df" in st.session_state:
+        df_res    = st.session_state["fleet_df"]
+        total     = st.session_state["fleet_total"]
+        critiques = st.session_state["fleet_critiques"]
+        eleves    = st.session_state["fleet_eleves"]
+        normaux   = st.session_state["fleet_normaux"]
 
         k1,k2,k3,k4 = st.columns(4)
         k1.metric("🏭 Machines Analysées", total)
@@ -640,21 +648,26 @@ with tab2:
         else:
             st.success("✅ Aucune machine en état critique dans cet échantillon.")
 
-        # ── Bouton PDF flotte
+        # ── PDF flotte : génération auto + download direct
         st.markdown("---")
-        if st.button("📄 Générer le Rapport PDF Flotte", type="primary", use_container_width=True):
-            with st.spinner("Génération du rapport flotte..."):
+        # Génère (ou régénère) le PDF à chaque fois que df_res change
+        if "fleet_pdf" not in st.session_state or st.session_state.get("fleet_pdf_n") != total:
+            with st.spinner("Préparation du rapport PDF..."):
                 pdf_fleet = generate_pdf_fleet(
                     df_res[display_cols + ["_level"]].rename(columns={"_level":"Niveau_raw"}),
                     total, critiques, eleves, normaux)
-            fname = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-            st.download_button(
-                label="⬇️ Télécharger le rapport PDF Flotte",
-                data=pdf_fleet,
-                file_name=fname,
-                mime="application/pdf",
-                use_container_width=True,
-            )
+            st.session_state["fleet_pdf"]       = pdf_fleet
+            st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+            st.session_state["fleet_pdf_n"]     = total
+
+        st.download_button(
+            label="📄 Télécharger le Rapport PDF Flotte",
+            data=st.session_state["fleet_pdf"],
+            file_name=st.session_state["fleet_pdf_fname"],
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary",
+        )
 
 # ── Footer
 st.markdown("---")
