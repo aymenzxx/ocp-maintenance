@@ -616,19 +616,27 @@ with tab1:
         proba, level, css, action = predict(machine_data)
         pct = proba * 100
 
-        # ── Bouton d'alerte email manuel (Tab1)
+        # ── Bouton d'alerte email manuel (Tab1) — générer PDF puis envoyer
         if email_enabled and level in ("CRITIQUE", "ELEVE") and resend_api_key and recipients:
             st.markdown("---")
             if st.button(f"📧 Envoyer l'alerte email ({level})", type="primary", use_container_width=True):
-                _pdf_key2 = f"single_pdf_{machine_id}_{level}"
-                _pdf_data  = st.session_state.get(_pdf_key2) if attach_pdf else None
-                _pdf_fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_data else None
-                with st.spinner("Envoi en cours..."):
+                with st.spinner("Génération du PDF et envoi..."):
+                    # Calcul des flags pour le PDF
+                    _flags_email = []
+                    if machine_data["Temperature_C"] > 80:          _flags_email.append("🔴 Surchauffe détectée")
+                    if machine_data["Vibration_mms"] > 15:           _flags_email.append("🔴 Vibration élevée")
+                    if machine_data["Last_Maintenance_Days_Ago"] > 180: _flags_email.append("🟠 Maintenance en retard")
+                    if machine_data["Oil_Level_pct"] < 30:           _flags_email.append("🟠 Niveau huile critique")
+                    if machine_data["Coolant_Level_pct"] < 30:       _flags_email.append("🟠 Liquide refroidissement bas")
+                    if machine_data["Error_Codes_Last_30_Days"] > 5: _flags_email.append("🟡 Codes erreur fréquents")
+                    # Génération PDF
+                    _pdf_data  = generate_pdf_single(machine_data, proba, level, action, _flags_email) if attach_pdf else None
+                    _pdf_fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_data else None
                     ok2, msg2 = send_alert_email(
                         resend_api_key, recipients,
                         machine_id, machine_type, level, pct, action, _pdf_data, _pdf_fname)
                 if ok2:
-                    st.success(f"✅ Alerte envoyée à {len(recipients)} destinataire(s)")
+                    st.success(f"✅ Alerte {'+ PDF ' if attach_pdf else ''}envoyée à {len(recipients)} destinataire(s)")
                 else:
                     st.error(msg2)
 
@@ -735,7 +743,7 @@ with tab2:
                              "_level": level2})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
-        # ── Alertes email flotte (CRITIQUE + ELEVE)
+        # ── Alertes email flotte (CRITIQUE + ELEVE) avec PDF joint
         if email_enabled and resend_api_key and recipients:
             critiques_df = df_res[df_res["_level"].isin(["CRITIQUE", "ELEVE"])]
             if not critiques_df.empty:
@@ -743,16 +751,31 @@ with tab2:
                 if _fleet_alert_key not in st.session_state:
                     _sent, _errors = 0, []
                     for _, _row in critiques_df.iterrows():
+                        # Récupérer les données de la machine pour générer le PDF
+                        _mdata = sim[sim["Machine_ID"] == _row["Machine_ID"]].iloc[0].to_dict()
+                        _mdata["machine_age"] = 2040 - int(_mdata.get("Installation_Year", 2025))
+                        _mdata["Machine_ID"]  = _row["Machine_ID"]
+                        _mdata["Machine_Type"]= _row["Type"]
+                        _mflags = []
+                        if _mdata.get("Temperature_C", 0) > 80:            _mflags.append("🔴 Surchauffe détectée")
+                        if _mdata.get("Vibration_mms", 0) > 15:            _mflags.append("🔴 Vibration élevée")
+                        if _mdata.get("Last_Maintenance_Days_Ago", 0) > 180: _mflags.append("🟠 Maintenance en retard")
+                        if _mdata.get("Oil_Level_pct", 100) < 30:          _mflags.append("🟠 Niveau huile critique")
+                        if _mdata.get("Coolant_Level_pct", 100) < 30:      _mflags.append("🟠 Liquide refroidissement bas")
+                        if _mdata.get("Error_Codes_Last_30_Days", 0) > 5:  _mflags.append("🟡 Codes erreur fréquents")
+                        _proba_row, _, _, _ = predict(_mdata)
+                        _pdf_b = generate_pdf_single(_mdata, _proba_row, _row["_level"], _row["Action"], _mflags) if attach_pdf else None
+                        _pdf_n = f"rapport_OCP_{_row['Machine_ID']}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_b else None
                         _ok3, _msg3 = send_alert_email(
                             resend_api_key, recipients,
                             _row["Machine_ID"], _row["Type"], _row["_level"],
-                            float(_row["Score (%)"]), _row["Action"], None, None)
+                            float(_row["Score (%)"]), _row["Action"], _pdf_b, _pdf_n)
                         if _ok3: _sent += 1
                         else: _errors.append(_msg3)
                     st.session_state[_fleet_alert_key] = (_sent, _errors)
                 _sent, _errors = st.session_state[f"fleet_alert_{n_sim}"]
                 if _sent:
-                    st.sidebar.success(f"✅ {_sent} alertes email envoyées")
+                    st.sidebar.success(f"✅ {_sent} alertes email envoyées (avec PDF)")
                 for _err in set(_errors):
                     st.sidebar.error(_err)
 
