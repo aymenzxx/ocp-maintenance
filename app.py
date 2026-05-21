@@ -283,10 +283,10 @@ with tab2:
         # Color-coded table
         def color_row(row):
             s = row["Score (%)"]
-            if s >= 80:   bg = "#D65468"
-            elif s >= 55: bg = "#92827E"
+            if s >= 80:   bg = "#FF9393"
+            elif s >= 55: bg = "#FFF4B9"
             elif s >= THRESHOLD * 100: bg = "#DFD676"
-            else:         bg = "#E8F5E9"
+            else:         bg = "#6DC774"
             return [f"background-color: {bg}"] * len(row)
 
         st.dataframe(
