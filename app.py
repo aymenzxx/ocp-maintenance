@@ -4,11 +4,8 @@ import numpy as np
 import pandas as pd
 import base64
 import io
-import smtplib
-import ssl
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
+import requests
+import base64 as _b64
 from pathlib import Path
 from datetime import datetime
 
@@ -135,39 +132,32 @@ def predict(d: dict):
 # ═══════════════════════════════════════════════════════
 # EMAIL ALERT FUNCTION
 # ═══════════════════════════════════════════════════════
-def send_alert_email(smtp_host: str, smtp_port: int, sender: str,
-                     password: str, recipients: list,
+def send_alert_email(api_key: str, recipients: list,
                      machine_id: str, machine_type: str,
                      level: str, score_pct: float, action: str,
                      pdf_bytes: bytes = None, pdf_filename: str = None) -> tuple[bool, str]:
-    """Send alert email via SMTP. Returns (success, message)."""
-    level_colors = {
-        "CRITIQUE": "#D32F2F",
-        "ELEVE":    "#FF6600",
-    }
+    """Send alert email via Resend API. Returns (success, message)."""
+    level_colors = {"CRITIQUE": "#D32F2F", "ELEVE": "#FF6600"}
     level_labels = {
         "CRITIQUE": "🔴 CRITIQUE — Intervention Immédiate",
         "ELEVE":    "🟠 ÉLEVÉ — Planifier Maintenance",
     }
-    color  = level_colors.get(level, "#006633")
-    label  = level_labels.get(level, level)
+    color   = level_colors.get(level, "#006633")
+    label   = level_labels.get(level, level)
     now_str = datetime.now().strftime("%d/%m/%Y à %H:%M")
 
     html_body = f"""
     <html><body style="font-family:Arial,sans-serif;background:#f5f5f5;margin:0;padding:0">
     <div style="max-width:600px;margin:30px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
-      <!-- Header -->
       <div style="background:#006633;padding:24px 32px">
         <h1 style="color:#fff;margin:0;font-size:22px">⚠️ OCP — Alerte Maintenance Prédictive</h1>
         <p style="color:#a8d5b5;margin:6px 0 0;font-size:13px">Système de détection automatique · {now_str}</p>
       </div>
-      <!-- Level banner -->
       <div style="background:{color};padding:16px 32px;text-align:center">
         <h2 style="color:#fff;margin:0;font-size:20px">{label}</h2>
         <p style="color:#fff;margin:6px 0 0;font-size:28px;font-weight:bold">{score_pct:.1f}%</p>
         <p style="color:rgba(255,255,255,0.85);margin:2px 0 0;font-size:12px">Score de risque de panne</p>
       </div>
-      <!-- Body -->
       <div style="padding:28px 32px">
         <table style="width:100%;border-collapse:collapse;font-size:14px">
           <tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#555;width:40%"><b>🏭 Machine ID</b></td>
@@ -177,59 +167,43 @@ def send_alert_email(smtp_host: str, smtp_port: int, sender: str,
           <tr><td style="padding:10px 0;border-bottom:1px solid #eee;color:#555"><b>📅 Détecté le</b></td>
               <td style="padding:10px 0;border-bottom:1px solid #eee">{now_str}</td></tr>
         </table>
-        <!-- Action box -->
         <div style="background:#fff8e1;border-left:4px solid {color};padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0">
           <p style="margin:0 0 4px;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:1px">Action Recommandée</p>
           <p style="margin:0;font-size:15px;font-weight:bold;color:#333">{action}</p>
         </div>
         {'<p style="font-size:13px;color:#555">📎 Le rapport PDF détaillé est joint à cet email.</p>' if pdf_bytes else ''}
         <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
-        <p style="font-size:12px;color:#999;margin:0">
-          OCP Group — Système de Maintenance Prédictive<br>
-          Ce message est généré automatiquement. Ne pas répondre.
-        </p>
+        <p style="font-size:12px;color:#999;margin:0">OCP Group — Système de Maintenance Prédictive<br>Ce message est généré automatiquement.</p>
       </div>
-    </div>
-    </body></html>
+    </div></body></html>
     """
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[OCP ALERTE {level}] Machine {machine_id} — Score {score_pct:.1f}%"
-    msg["From"]    = sender
-    msg["To"]      = ", ".join(recipients)
-
-    msg.attach(MIMEText(
-        (f"ALERTE {level} - Machine {machine_id} ({machine_type})\n"
-         f"Score de risque : {score_pct:.1f}%\n"
-         f"Action : {action}\n"
-         f"Detecte le {now_str}"),
-        "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
+    payload = {
+        "from":    "OCP Alertes <onboarding@resend.dev>",
+        "to":      recipients,
+        "subject": f"[OCP ALERTE {level}] Machine {machine_id} — Score {score_pct:.1f}%",
+        "html":    html_body,
+    }
     if pdf_bytes and pdf_filename:
-        att = MIMEApplication(pdf_bytes, Name=pdf_filename)
-        att["Content-Disposition"] = f'attachment; filename="{pdf_filename}"'
-        msg.attach(att)
+        payload["attachments"] = [{
+            "filename": pdf_filename,
+            "content":  _b64.b64encode(pdf_bytes).decode(),
+        }]
 
     try:
-        context = ssl.create_default_context()
-        if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
-                server.login(sender, password)
-                server.sendmail(sender, recipients, msg.as_string())
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            return True, "✅ Email envoyé avec succès"
         else:
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.login(sender, password)
-                server.sendmail(sender, recipients, msg.as_string())
-        return True, "Email envoyé avec succès ✅"
-    except smtplib.SMTPAuthenticationError:
-        return False, "❌ Erreur authentification — vérifiez email/mot de passe (Gmail: utilisez un mot de passe d'application)"
-    except smtplib.SMTPConnectError:
-        return False, f"❌ Impossible de se connecter à {smtp_host}:{smtp_port}"
+            err = resp.json().get("message", resp.text)
+            return False, f"❌ Resend erreur : {err}"
     except Exception as e:
-        return False, f"❌ Erreur : {str(e)}"
+        return False, f"❌ Erreur réseau : {str(e)}"
 
 
 def generate_pdf_single(data: dict, proba: float, level: str, action: str, flags: list) -> bytes:
@@ -559,66 +533,31 @@ with st.sidebar:
     email_enabled = st.toggle("Activer les alertes email", value=False)
 
     if email_enabled:
-        smtp_provider = st.selectbox(
-            "Fournisseur",
-            ["Gmail", "Outlook / Hotmail", "Yahoo Mail", "Personnalisé"],
-        )
-        provider_presets = {
-            "Gmail":              ("smtp.gmail.com", 587),
-            "Outlook / Hotmail":  ("smtp.office365.com", 587),
-            "Yahoo Mail":         ("smtp.mail.yahoo.com", 587),
-            "Personnalisé":       ("", 587),
-        }
-        default_host, default_port = provider_presets[smtp_provider]
-
-        if smtp_provider == "Personnalisé":
-            smtp_host = st.text_input("Serveur SMTP", placeholder="smtp.example.com")
-            smtp_port = st.number_input("Port", value=587, min_value=1, max_value=65535)
-        else:
-            smtp_host = default_host
-            smtp_port = default_port
-            st.caption(f"Serveur : `{smtp_host}:{smtp_port}`")
-
-        sender_email = st.text_input("Email expéditeur", placeholder="votre@email.com")
-        sender_pass  = st.text_input("Mot de passe", type="password",
-                                      placeholder="Gmail: mot de passe d'application")
+        st.caption("Obtenez votre clé sur [resend.com](https://resend.com) (gratuit)")
+        resend_api_key = st.text_input("Clé API Resend", placeholder="re_xxxxxxxxxxxx", type="password")
         recipients_raw = st.text_area(
             "Destinataires (un par ligne)",
             placeholder="responsable@ocp.ma\nmaintenance@ocp.ma",
             height=90,
         )
         recipients = [r.strip() for r in recipients_raw.splitlines() if r.strip()]
-
         attach_pdf = st.checkbox("Joindre le rapport PDF", value=True)
 
-        if smtp_provider == "Gmail":
-            st.info("💡 Gmail nécessite un **mot de passe d'application** (pas votre mot de passe habituel). [Créer ici](https://myaccount.google.com/apppasswords)", icon="ℹ️")
-
-        st.markdown("**Niveaux déclencheurs :** 🔴 CRITIQUE · 🟠 ÉLEVÉ")
-        st.markdown("---")
-        
-        # Test connection button
-        if st.button("🔌 Tester la connexion", use_container_width=True):
-            if not sender_email or not sender_pass or not smtp_host:
-                st.error("Remplissez tous les champs.")
-            elif not recipients:
-                st.error("Ajoutez au moins un destinataire.")
+        if st.button("🔌 Tester", use_container_width=True):
+            if not resend_api_key or not recipients:
+                st.error("Entrez la clé API et au moins un destinataire.")
             else:
-                with st.spinner("Test en cours..."):
+                with st.spinner("Envoi du test..."):
                     ok, msg = send_alert_email(
-                        smtp_host, int(smtp_port), sender_email, sender_pass,
-                        recipients[:1],
+                        resend_api_key, recipients[:1],
                         "MC_OCP_TEST", "Test", "CRITIQUE", 92.5,
                         "Ceci est un email de test — connexion réussie.",
                         None, None,
                     )
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+                if ok: st.success(msg)
+                else:  st.error(msg)
     else:
-        st.caption("Activez le toggle pour configurer les alertes email SMTP.")
-        smtp_host = smtp_port = sender_email = sender_pass = recipients = attach_pdf = None
+        resend_api_key = recipients = attach_pdf = None
 
 tab1, tab2 = st.tabs(["🔍 Analyse Machine", "📊 Simulation Flotte"])
 
@@ -678,7 +617,7 @@ with tab1:
         pct = proba * 100
 
         # ── Bouton d'alerte email manuel (Tab1)
-        if email_enabled and level in ("CRITIQUE", "ELEVE") and sender_email and sender_pass and recipients:
+        if email_enabled and level in ("CRITIQUE", "ELEVE") and resend_api_key and recipients:
             st.markdown("---")
             if st.button(f"📧 Envoyer l'alerte email ({level})", type="primary", use_container_width=True):
                 _pdf_key2 = f"single_pdf_{machine_id}_{level}"
@@ -686,7 +625,7 @@ with tab1:
                 _pdf_fname = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf" if _pdf_data else None
                 with st.spinner("Envoi en cours..."):
                     ok2, msg2 = send_alert_email(
-                        smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
+                        resend_api_key, recipients,
                         machine_id, machine_type, level, pct, action, _pdf_data, _pdf_fname)
                 if ok2:
                     st.success(f"✅ Alerte envoyée à {len(recipients)} destinataire(s)")
@@ -797,7 +736,7 @@ with tab2:
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
         # ── Alertes email flotte (CRITIQUE + ELEVE)
-        if email_enabled and sender_email and sender_pass and recipients:
+        if email_enabled and resend_api_key and recipients:
             critiques_df = df_res[df_res["_level"].isin(["CRITIQUE", "ELEVE"])]
             if not critiques_df.empty:
                 _fleet_alert_key = f"fleet_alert_{n_sim}"
@@ -805,7 +744,7 @@ with tab2:
                     _sent, _errors = 0, []
                     for _, _row in critiques_df.iterrows():
                         _ok3, _msg3 = send_alert_email(
-                            smtp_host, int(smtp_port), sender_email, sender_pass, recipients,
+                            resend_api_key, recipients,
                             _row["Machine_ID"], _row["Type"], _row["_level"],
                             float(_row["Score (%)"]), _row["Action"], None, None)
                         if _ok3: _sent += 1
