@@ -548,17 +548,33 @@ with tab1:
         for f in flags:
             st.warning(f)
 
-        # ── PDF machine : download direct (pas de double clic)
+        # ── PDF machine : ouvre dans le navigateur
         st.markdown("---")
         pdf_bytes = generate_pdf_single(machine_data, proba, level, action, flags)
-        st.download_button(
-            label="📄 Télécharger le Rapport PDF",
-            data=pdf_bytes,
-            file_name=f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            type="primary",
-        )
+        b64_single = base64.b64encode(pdf_bytes).decode("utf-8")
+        fname_single = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        import streamlit.components.v1 as components
+        components.html(f"""
+        <style>
+          .pdf-btn {{
+            display:block; width:100%; padding:14px 0;
+            background:#006633; color:white; font-size:16px; font-weight:700;
+            border:none; border-radius:8px; cursor:pointer; text-align:center;
+            font-family:sans-serif; letter-spacing:0.5px;
+            transition: background 0.2s;
+          }}
+          .pdf-btn:hover {{ background:#004d26; }}
+        </style>
+        <button class="pdf-btn" onclick="
+          var b = atob('{b64_single}');
+          var ab = new ArrayBuffer(b.length);
+          var ua = new Uint8Array(ab);
+          for(var i=0;i<b.length;i++) ua[i]=b.charCodeAt(i);
+          var blob = new Blob([ab],{{type:'application/pdf'}});
+          var url  = URL.createObjectURL(blob);
+          window.open(url,'_blank');
+        ">📄 Ouvrir le Rapport PDF</button>
+        """, height=60)
 
 # ═══════════════════════════════
 # TAB 2
@@ -665,17 +681,35 @@ with tab2:
         else:
             st.success("✅ Aucune machine en état critique dans cet échantillon.")
 
-        # ── PDF flotte : download direct
+        # ── PDF flotte : ouvre dans le navigateur
         st.markdown("---")
         if "fleet_pdf" in st.session_state:
-            st.download_button(
-                label="📄 Télécharger le Rapport PDF Flotte",
-                data=st.session_state["fleet_pdf"],
-                file_name=st.session_state["fleet_pdf_fname"],
-                mime="application/pdf",
-                use_container_width=True,
-                type="primary",
-            )
+            import streamlit.components.v1 as components
+            b64_fleet = base64.b64encode(st.session_state["fleet_pdf"]).decode("utf-8")
+            fname_fleet = st.session_state.get("fleet_pdf_fname", "rapport_flotte.pdf")
+            components.html(f"""
+            <style>
+              .pdf-btn {{
+                display:block; width:100%; padding:14px 0;
+                background:#006633; color:white; font-size:16px; font-weight:700;
+                border:none; border-radius:8px; cursor:pointer; text-align:center;
+                font-family:sans-serif; letter-spacing:0.5px;
+                transition: background 0.2s;
+              }}
+              .pdf-btn:hover {{ background:#004d26; }}
+            </style>
+            <button class="pdf-btn" onclick="
+              var b = atob('{b64_fleet}');
+              var ab = new ArrayBuffer(b.length);
+              var ua = new Uint8Array(ab);
+              for(var i=0;i<b.length;i++) ua[i]=b.charCodeAt(i);
+              var blob = new Blob([ab],{{type:'application/pdf'}});
+              var url  = URL.createObjectURL(blob);
+              window.open(url,'_blank');
+            ">📄 Ouvrir le Rapport PDF Flotte</button>
+            """, height=60)
+        else:
+            st.info("ℹ️ Lancez d'abord la simulation pour générer le rapport PDF.")
 
 # ── Footer
 st.markdown("---")
