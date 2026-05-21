@@ -382,12 +382,14 @@ def generate_pdf_fleet(df_res: pd.DataFrame, n_total: int,
     header = [["Machine ID", "Type", "Score (%)", "Niveau", "Action Recommandee"]]
     rows = []
     for _, r in df_res.iterrows():
-        # Support both column names for backward compat
-        niveau_raw = r.get("_level", r.get("Niveau_raw", ""))
-        niveau_clean = niveau_raw if niveau_raw else (
-            r["Niveau"].replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ",""))
-        rows.append([r["Machine_ID"], r["Type"],
-                     f"{r['Score (%)']:.1f}%", niveau_clean, r["Action"]])
+        if "_level" in r.index and pd.notna(r["_level"]):
+            niveau_clean = str(r["_level"])
+        elif "Niveau" in r.index:
+            niveau_clean = str(r["Niveau"]).replace("🔴 ","").replace("🟠 ","").replace("🟡 ","").replace("🟢 ","")
+        else:
+            niveau_clean = "—"
+        rows.append([str(r["Machine_ID"]), str(r["Type"]),
+                     f"{float(r['Score (%)']):.1f}%", niveau_clean, str(r["Action"])])
 
     table_data = header + rows
     col_w = ["20%","18%","14%","14%","34%"]
@@ -548,33 +550,23 @@ with tab1:
         for f in flags:
             st.warning(f)
 
-        # ── PDF machine : ouvre dans le navigateur
+        # ── PDF machine : cached in session_state pour eviter crash au rerender
         st.markdown("---")
-        pdf_bytes = generate_pdf_single(machine_data, proba, level, action, flags)
-        b64_single = base64.b64encode(pdf_bytes).decode("utf-8")
-        fname_single = f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        import streamlit.components.v1 as components
-        components.html(f"""
-        <style>
-          .pdf-btn {{
-            display:block; width:100%; padding:14px 0;
-            background:#006633; color:white; font-size:16px; font-weight:700;
-            border:none; border-radius:8px; cursor:pointer; text-align:center;
-            font-family:sans-serif; letter-spacing:0.5px;
-            transition: background 0.2s;
-          }}
-          .pdf-btn:hover {{ background:#004d26; }}
-        </style>
-        <button class="pdf-btn" onclick="
-          var b = atob('{b64_single}');
-          var ab = new ArrayBuffer(b.length);
-          var ua = new Uint8Array(ab);
-          for(var i=0;i<b.length;i++) ua[i]=b.charCodeAt(i);
-          var blob = new Blob([ab],{{type:'application/pdf'}});
-          var url  = URL.createObjectURL(blob);
-          window.open(url,'_blank');
-        ">📄 Ouvrir le Rapport PDF</button>
-        """, height=60)
+        _pdf_key = f"single_pdf_{machine_id}_{level}"
+        if _pdf_key not in st.session_state:
+            try:
+                st.session_state[_pdf_key] = generate_pdf_single(machine_data, proba, level, action, flags)
+            except Exception as _e:
+                st.error(f"❌ Erreur PDF machine : {_e}")
+        if _pdf_key in st.session_state:
+            st.download_button(
+                label="📄 Télécharger le Rapport PDF",
+                data=st.session_state[_pdf_key],
+                file_name=f"rapport_OCP_{machine_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
 
 # ═══════════════════════════════
 # TAB 2
@@ -621,26 +613,12 @@ with tab2:
                              "_level": level2})
         df_res = pd.DataFrame(results).sort_values("Score (%)", ascending=False)
 
-        _total     = len(df_res)
-        _critiques = int((df_res["_level"] == "CRITIQUE").sum())
-        _eleves    = int((df_res["_level"] == "ELEVE").sum())
-        _normaux   = int((df_res["_level"] == "FAIBLE").sum())
-        _dcols     = ["Machine_ID","Type","Score (%)","Niveau","Action"]
-
+        # ── Sauvegarde dans session_state pour survivre aux re-renders
         st.session_state["fleet_df"]       = df_res
-        st.session_state["fleet_total"]    = _total
-        st.session_state["fleet_critiques"]= _critiques
-        st.session_state["fleet_eleves"]   = _eleves
-        st.session_state["fleet_normaux"]  = _normaux
-
-        # Génération PDF une seule fois, au moment de la simulation
-        try:
-            _pdf = generate_pdf_fleet(df_res[_dcols + ["_level"]], _total, _critiques, _eleves, _normaux)
-            st.session_state["fleet_pdf"]       = _pdf
-            st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        except Exception as _e:
-            st.session_state.pop("fleet_pdf", None)
-            st.error(f"❌ Erreur génération PDF : {_e}")
+        st.session_state["fleet_total"]    = len(df_res)
+        st.session_state["fleet_critiques"]= int((df_res["_level"] == "CRITIQUE").sum())
+        st.session_state["fleet_eleves"]   = int((df_res["_level"] == "ELEVE").sum())
+        st.session_state["fleet_normaux"]  = int((df_res["_level"] == "FAIBLE").sum())
 
     # ── Affichage des résultats (persistent via session_state)
     if "fleet_df" in st.session_state:
@@ -681,35 +659,30 @@ with tab2:
         else:
             st.success("✅ Aucune machine en état critique dans cet échantillon.")
 
-        # ── PDF flotte : ouvre dans le navigateur
+        # ── PDF flotte : génération auto + download direct
         st.markdown("---")
+        # Génère (ou régénère) le PDF à chaque fois que df_res change
+        if "fleet_pdf" not in st.session_state or st.session_state.get("fleet_pdf_n") != total:
+            with st.spinner("Préparation du rapport PDF..."):
+                try:
+                    pdf_fleet = generate_pdf_fleet(
+                        df_res[display_cols + ["_level"]],
+                        total, critiques, eleves, normaux)
+                    st.session_state["fleet_pdf"]       = pdf_fleet
+                    st.session_state["fleet_pdf_fname"] = f"rapport_OCP_flotte_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+                    st.session_state["fleet_pdf_n"]     = total
+                except Exception as _e:
+                    st.error(f"❌ Erreur PDF flotte : {_e}")
+
         if "fleet_pdf" in st.session_state:
-            import streamlit.components.v1 as components
-            b64_fleet = base64.b64encode(st.session_state["fleet_pdf"]).decode("utf-8")
-            fname_fleet = st.session_state.get("fleet_pdf_fname", "rapport_flotte.pdf")
-            components.html(f"""
-            <style>
-              .pdf-btn {{
-                display:block; width:100%; padding:14px 0;
-                background:#006633; color:white; font-size:16px; font-weight:700;
-                border:none; border-radius:8px; cursor:pointer; text-align:center;
-                font-family:sans-serif; letter-spacing:0.5px;
-                transition: background 0.2s;
-              }}
-              .pdf-btn:hover {{ background:#004d26; }}
-            </style>
-            <button class="pdf-btn" onclick="
-              var b = atob('{b64_fleet}');
-              var ab = new ArrayBuffer(b.length);
-              var ua = new Uint8Array(ab);
-              for(var i=0;i<b.length;i++) ua[i]=b.charCodeAt(i);
-              var blob = new Blob([ab],{{type:'application/pdf'}});
-              var url  = URL.createObjectURL(blob);
-              window.open(url,'_blank');
-            ">📄 Ouvrir le Rapport PDF Flotte</button>
-            """, height=60)
-        else:
-            st.info("ℹ️ Lancez d'abord la simulation pour générer le rapport PDF.")
+            st.download_button(
+                label="📄 Télécharger le Rapport PDF Flotte",
+                data=st.session_state["fleet_pdf"],
+                file_name=st.session_state["fleet_pdf_fname"],
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
 
 # ── Footer
 st.markdown("---")
